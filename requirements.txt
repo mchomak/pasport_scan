@@ -1,0 +1,30 @@
+# Telegram Bot
+aiogram==3.4.1
+
+# Async Database
+SQLAlchemy[asyncio]==2.0.25
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Configuration
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# HTTP Client
+httpx==0.26.0
+
+# Image Processing
+Pillow==10.2.0
+opencv-python-headless==4.9.0.80
+PyMuPDF==1.23.21
+
+# Data Export
+pandas==2.2.0
+openpyxl==3.1.2
+
+# Logging
+structlog==24.1.0
+
+# Utils
+python-dateutil==2.8.2

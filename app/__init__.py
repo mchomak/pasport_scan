@@ -1,0 +1,1 @@
+"""Passport OCR Bot application."""
