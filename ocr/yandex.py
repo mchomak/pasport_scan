@@ -4,11 +4,11 @@ import asyncio
 from typing import Literal, Optional
 from datetime import datetime
 import httpx
-from app.ocr.provider import OcrProvider
-from app.ocr.models import OcrResult, PassportData
-from app.config import settings
-from app.utils.logger import get_logger
-from app.utils.rate_limiter import RateLimiter
+from ocr.provider import OcrProvider
+from ocr.models import OcrResult, PassportData
+from config import settings
+from utils.logger import get_logger
+from utils.rate_limiter import RateLimiter
 
 logger = get_logger(__name__)
 

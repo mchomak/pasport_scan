@@ -3,8 +3,8 @@ import io
 import csv
 from typing import List, Literal
 import pandas as pd
-from app.db.models import PassportRecord
-from app.utils.logger import get_logger
+from db.models import PassportRecord
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

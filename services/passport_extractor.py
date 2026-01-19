@@ -1,9 +1,9 @@
 """Passport extraction service with rotation heuristics."""
 from typing import Literal
-from app.ocr.provider import OcrProvider
-from app.ocr.models import OcrResult, PassportData
-from app.services.image_processor import ImageProcessor
-from app.utils.logger import get_logger
+from ocr.provider import OcrProvider
+from ocr.models import OcrResult, PassportData
+from services.image_processor import ImageProcessor
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

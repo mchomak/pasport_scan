@@ -4,8 +4,8 @@ from datetime import date
 from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import PassportRecord
-from app.utils.logger import get_logger
+from db.models import PassportRecord
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

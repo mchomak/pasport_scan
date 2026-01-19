@@ -6,13 +6,13 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.config import settings
-from app.db.database import get_db
-from app.db.repository import PassportRepository
-from app.ocr.provider import get_ocr_provider
-from app.services import ImageProcessor, PdfProcessor, PassportExtractor, ExportService
-from app.bot.keyboards import get_export_keyboard
-from app.utils.logger import get_logger
+from config import settings
+from db.database import get_db
+from db.repository import PassportRepository
+from ocr.provider import get_ocr_provider
+from services import ImageProcessor, PdfProcessor, PassportExtractor, ExportService
+from bot.keyboards import get_export_keyboard
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 router = Router()

@@ -1,9 +1,9 @@
 """OCR provider interface."""
 from abc import ABC, abstractmethod
 from typing import Literal
-from app.ocr.models import OcrResult
-from app.config import settings
-from app.utils.logger import get_logger
+from ocr.models import OcrResult
+from config import settings
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -43,7 +43,7 @@ def get_ocr_provider() -> OcrProvider:
     provider_model = settings.ocr_provider_model
 
     if provider_model == "yandex":
-        from app.ocr.yandex import YandexOcrProvider
+        from ocr.yandex import YandexOcrProvider
         return YandexOcrProvider()
     else:
         raise ValueError(f"OCR provider '{provider_model}' is not supported")
