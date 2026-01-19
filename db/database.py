@@ -11,6 +11,9 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Import Base for table creation
+from db.models import Base
+
 # Global engine and session maker
 engine: AsyncEngine | None = None
 async_session_maker: async_sessionmaker[AsyncSession] | None = None
@@ -49,6 +52,21 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
         finally:
             await session.close()
+
+
+async def create_tables() -> None:
+    """Create all tables if they don't exist."""
+    global engine
+
+    if engine is None:
+        raise RuntimeError("Database not initialized. Call init_db() first.")
+
+    logger.info("Creating database tables if they don't exist")
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    logger.info("Database tables created successfully")
 
 
 async def close_db() -> None:

@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from config import settings
-from db.database import init_db, close_db
+from db.database import init_db, create_tables, close_db
 from bot.handlers import router
 from utils.logger import setup_logger, get_logger
 
@@ -22,6 +22,10 @@ async def main():
     try:
         init_db()
         logger.info("Database initialized")
+
+        # Create tables if they don't exist
+        await create_tables()
+        logger.info("Database tables ready")
     except Exception as e:
         logger.error("Failed to initialize database", error=str(e))
         sys.exit(1)

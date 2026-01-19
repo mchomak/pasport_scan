@@ -18,7 +18,8 @@ class YandexOcrProvider(OcrProvider):
 
     def __init__(self):
         self.endpoint = settings.yc_ocr_endpoint
-        self.auth_mode = settings.yc_auth_mode
+        self.folder_id = settings.yc_folder_id
+        self.iam_token = settings.yc_iam_token
         self.rate_limiter = RateLimiter(rate=settings.ocr_rate_limit_rps)
         self.client = httpx.AsyncClient(timeout=30.0)
 
@@ -29,16 +30,12 @@ class YandexOcrProvider(OcrProvider):
         await self.client.aclose()
 
     def _get_headers(self) -> dict[str, str]:
-        """Get authentication headers."""
-        headers = {"Content-Type": "application/json"}
-
-        if self.auth_mode == "iam_token":
-            headers["Authorization"] = f"Bearer {settings.yc_iam_token}"
-            headers["x-folder-id"] = settings.yc_folder_id
-        elif self.auth_mode == "api_key":
-            headers["Authorization"] = f"Api-Key {settings.yc_api_key}"
-
-        return headers
+        """Get authentication headers - copied from ocr_test.py"""
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.iam_token}",
+            "x-folder-id": self.folder_id
+        }
 
     def _parse_date(self, date_str: Optional[str]) -> Optional[datetime.date]:
         """Parse date from various formats."""
@@ -76,9 +73,10 @@ class YandexOcrProvider(OcrProvider):
                 entity_map[name] = text.strip()
 
         # Map Yandex OCR entity names to our passport fields
+        # Field names match Yandex OCR API response structure (see ocr_test.py)
         passport_data = PassportData(
             passport_number=entity_map.get("number"),
-            issued_by=entity_map.get("issue_place"),
+            issued_by=entity_map.get("issued_by"),  # Fixed: was "issue_place"
             issue_date=self._parse_date(entity_map.get("issue_date")),
             subdivision_code=entity_map.get("subdivision"),
             surname=entity_map.get("surname"),
@@ -170,8 +168,9 @@ class YandexOcrProvider(OcrProvider):
 
             response_data = await self._make_request(image_bytes, mime_type)
 
-            # Extract entities from response
-            entities = response_data.get("result", {}).get("entities", [])
+            # Extract entities from response - correct path according to Yandex OCR API
+            # Structure: response["result"]["textAnnotation"]["entities"]
+            entities = response_data.get("result", {}).get("textAnnotation", {}).get("entities", [])
 
             passport_data = self._extract_passport_data(entities)
 
