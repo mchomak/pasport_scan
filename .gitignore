@@ -46,7 +46,7 @@ tmp/*
 
 # Logs
 *.log
-
+/data/
 # OS
 .DS_Store
 Thumbs.db
