@@ -13,6 +13,7 @@ from ocr.provider import get_ocr_provider
 from services import ImageProcessor, PdfProcessor, PassportExtractor, ExportService
 from bot.keyboards import get_export_keyboard
 from utils.logger import get_logger
+from utils.passport_formatter import format_passport_type1, format_passport_type2
 
 logger = get_logger(__name__)
 router = Router()
@@ -292,6 +293,10 @@ async def process_image(
                 passport_data.middle_name
             ])) or "не найдено"
 
+            # Generate encoded formats
+            format1 = format_passport_type1(passport_data)
+            format2 = format_passport_type2(passport_data)
+
             response_text = (
                 f"✅ Распознавание завершено\n\n"
                 f"📝 ID записи: {record.id}\n"
@@ -305,7 +310,10 @@ async def process_image(
                 f"Выдан: {passport_data.issued_by or 'не найдено'}\n"
                 f"Дата выдачи: {passport_data.issue_date or 'не найдено'}\n"
                 f"Код подразделения: {passport_data.subdivision_code or 'не найдено'}\n\n"
-                f"📊 Заполнено полей: {quality_score}/10"
+                f"📊 Заполнено полей: {quality_score}/10\n\n"
+                f"🔐 Закодированные форматы:\n"
+                f"<code>{format1}</code>\n\n"
+                f"<code>{format2}</code>"
             )
 
             await status_msg.edit_text(response_text)
@@ -389,13 +397,20 @@ async def process_pdf(
                         passport_data.middle_name
                     ])) or "не найдено"
 
+                    # Generate encoded formats
+                    format1 = format_passport_type1(passport_data)
+                    format2 = format_passport_type2(passport_data)
+
                     response_text = (
                         f"✅ Страница {page_index + 1} обработана\n\n"
                         f"📝 ID записи: {record.id}\n\n"
                         f"📋 Данные:\n"
                         f"ФИО: {full_name}\n"
                         f"Серия и номер: {passport_data.passport_number or 'не найдено'}\n"
-                        f"Заполнено полей: {quality_score}/10"
+                        f"Заполнено полей: {quality_score}/10\n\n"
+                        f"🔐 Закодированные форматы:\n"
+                        f"<code>{format1}</code>\n\n"
+                        f"<code>{format2}</code>"
                     )
 
                     await page_status.edit_text(response_text)

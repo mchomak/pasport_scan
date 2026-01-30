@@ -9,8 +9,8 @@ import json
 
 # ============ НАСТРОЙКИ ============
 IMAGE_PATH = "./data/1.png"  # Укажи путь к фото паспорта
-IAM_TOKEN = ""          # Твой IAM токен
-FOLDER_ID = "" 
+IAM_TOKEN = "t1.9euelZqXncrJyoqJx43Iy8uOzZ6Qmu3rnpWaj8-XiZCclcbJzMvPy5CYmM_l8_cNUzc0-e9lV0se_t3z900BNTT572VXSx7-zef1656VmprMyI_NmcuYkImaycuPiZ2S7_zF656VmprMyI_NmcuYkImaycuPiZ2S.a2bvYrZFK_wxaDdV3YtoA6y85Vt57ieELndyaqC2ZphrCxGroJdC1143zOueA3IDZKNMPM1EkWrK99ZPXFRuAg"          # Твой IAM токен
+FOLDER_ID = "b1g787a1o2647sac23tv" 
 
 # Endpoint для OCR API
 OCR_URL = "https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText"
