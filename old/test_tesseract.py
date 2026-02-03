@@ -27,19 +27,21 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Конфигурации Tesseract (PSM + whitelist)
 # ---------------------------------------------------------------------------
-# PSM 6  — однородный блок текста (русский текст паспорта)
-# PSM 7  — одна текстовая строка (серия/номер)
+# PSM 3  — auto page segmentation (русский текст: несколько блоков на паспорте)
+# PSM 6  — однородный блок текста (MRZ: два аккуратных ряда)
+# PSM 7  — одна текстовая строка (серия/номер, MRZ fallback)
 # PSM 11 — текст без порядка (разрозненные цифры)
 
 # Серия + номер: только цифры
-CFG_DIGITS_LINE = "--psm 7 -c tessedit_char_whitelist=0123456789"
-CFG_DIGITS_BLOCK = "--psm 11 -c tessedit_char_whitelist=0123456789"
+CFG_DIGITS_LINE = "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789"
+CFG_DIGITS_BLOCK = "--oem 3 --psm 11 -c tessedit_char_whitelist=0123456789"
 
-# MRZ: латиница + цифры + <
-CFG_MRZ = "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
+# MRZ: латиница + цифры + < (два варианта PSM — пробуем оба)
+CFG_MRZ_BLOCK = "--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
+CFG_MRZ_LINE  = "--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
 
-# Русский текст
-CFG_RUSSIAN = "--psm 6"
+# Русский текст — PSM 3 (auto page segmentation): паспорт содержит несколько блоков текста
+CFG_RUSSIAN = "--oem 3 --psm 3"
 
 
 # ---------------------------------------------------------------------------
@@ -86,15 +88,127 @@ def parse_mrz_date(six_digits):
 
 
 # ---------------------------------------------------------------------------
+# Document detection & cropping
+# ---------------------------------------------------------------------------
+def order_points(pts):
+    """Упорядочиваем 4 точки: top-left, top-right, bottom-right, bottom-left."""
+    rect = np.zeros((4, 2), dtype='float32')
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]   # top-left (наименьшая сумма)
+    rect[2] = pts[np.argmax(s)]   # bottom-right (наибольшая сумма)
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # top-right
+    rect[3] = pts[np.argmax(diff)]  # bottom-left
+    return rect
+
+
+def detect_and_crop_document(image_path, output_dir='preprocessed'):
+    """
+    Детектирует документ в кадре, применяет perspective transform.
+    Сохраняет выровненный crop и возвращает путь к нему.
+    Если документ не найден, сохраняет оригинал.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(image_path))[0]
+
+    img = cv2.imread(image_path)
+    if img is None:
+        return None
+
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Blur для снижения шума на Canny
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Canny edge detection
+    edged = cv2.Canny(blurred, 50, 200)
+
+    # Морфология: закрываем разрывы на контуре документа
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
+
+    # Находим контуры
+    contours, _ = cv2.findContours(closed.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Ищем самый большой прямоугольный контур
+    doc_contour = None
+    max_area = 0
+
+    for c in contours:
+        area = cv2.contourArea(c)
+        # Документ должен быть минимум 30% от площади кадра
+        if area < (w * h * 0.3):
+            continue
+
+        # Аппроксимируем контур до многоугольника
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+        # Если получили четырёхугольник — кандидат
+        if len(approx) == 4 and area > max_area:
+            max_area = area
+            doc_contour = approx
+
+    # Если не нашли прямоугольный контур — сохраняем оригинал
+    if doc_contour is None:
+        print("  ⚠️  Документ не детектирован, используем полное изображение")
+        cropped_path = f"{output_dir}/{base}_cropped.jpg"
+        cv2.imwrite(cropped_path, img)
+        return cropped_path
+
+    # Применяем perspective transform
+    pts = doc_contour.reshape(4, 2)
+    rect = order_points(pts)
+
+    (tl, tr, br, bl) = rect
+
+    # Вычисляем новую ширину/высоту
+    widthA = np.linalg.norm(br - bl)
+    widthB = np.linalg.norm(tr - tl)
+    maxWidth = max(int(widthA), int(widthB))
+
+    heightA = np.linalg.norm(tr - br)
+    heightB = np.linalg.norm(tl - bl)
+    maxHeight = max(int(heightA), int(heightB))
+
+    # Целевые координаты для transform
+    dst = np.array([
+        [0, 0],
+        [maxWidth - 1, 0],
+        [maxWidth - 1, maxHeight - 1],
+        [0, maxHeight - 1]
+    ], dtype='float32')
+
+    M = cv2.getPerspectiveTransform(rect, dst)
+    warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
+
+    # Паспорт РФ — формат А5 (портрейт: высота > ширина).
+    # Если после perspective transform получилась ландшафтная ориентация —
+    # контур был определён в повёрнутом состоянии. Поворачиваем в портрейт.
+    wh, ww = warped.shape[:2]
+    if ww > wh:
+        warped = cv2.rotate(warped, cv2.ROTATE_90_CLOCKWISE)
+        print(f"  ↻ Портрейт: {ww}x{wh} → {warped.shape[1]}x{warped.shape[0]}")
+
+    print(f"  ✓ Документ детектирован и выровнен: {w}x{h} → {warped.shape[1]}x{warped.shape[0]}")
+
+    cropped_path = f"{output_dir}/{base}_cropped.jpg"
+    cv2.imwrite(cropped_path, warped)
+    return cropped_path
+
+
+# ---------------------------------------------------------------------------
 # Препроцессинг (три зоны)
 # ---------------------------------------------------------------------------
 def _to_grayscale(img_bgr):
-    """BGR -> gray -> denoise -> CLAHE. Без бинаризации — Tesseract применяет её сам."""
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-    return gray
+    """
+    Чистое серое изображение — без blur, denoise, CLAHE.
+    Tesseract 4+ LSTM использует полутоны напрямую для распознавания.
+    Любая дополнительная обработка (denoise, CLAHE) размывает границы букв
+    и снижает качество распознавания.
+    """
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
 
 def preprocess_full(image_path, output_dir='preprocessed'):
@@ -105,8 +219,12 @@ def preprocess_full(image_path, output_dir='preprocessed'):
         raise ValueError(f"Не удалось загрузить: {image_path}")
 
     h, w = img.shape[:2]
-    if w < 2000:
-        scale = 2000 / w
+    # Tesseract LSTM нуждается в минимум 300 DPI эквивалентом.
+    # Для паспорта (~A5) это примерно 1240x1748px.
+    # Берём 3x от оригинала или минимум 3000px ширины — whichever больше.
+    target_w = max(w * 3, 3000)
+    if target_w > w:
+        scale = target_w / w
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
         print(f"  ↗ upscale {w}x{h} → {img.shape[1]}x{img.shape[0]}")
 
@@ -117,8 +235,12 @@ def preprocess_full(image_path, output_dir='preprocessed'):
     return path
 
 
-def preprocess_right_strip(image_path, output_dir='preprocessed'):
-    """Вырезаем правую полосу (~15%) и делаем два варианта поворота (90°/270°)."""
+def preprocess_edge_strips(image_path, output_dir='preprocessed'):
+    """
+    Серия/номер может оказаться на любом из 4 краёв после perspective transform.
+    Вырезаем полоску (20%) с каждого края и для каждой делаем 2 ротации.
+    Итого 8 вариантов — OCR возьмёт тот, где больше цифр.
+    """
     os.makedirs(output_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(image_path))[0]
     img = cv2.imread(image_path)
@@ -126,42 +248,62 @@ def preprocess_right_strip(image_path, output_dir='preprocessed'):
         return []
 
     h, w = img.shape[:2]
-    strip = img[:, int(w * 0.85):, :]
+
+    # 4 края — 20% от соответствующей размерности
+    edges = [
+        ('right',  img[:, int(w * 0.80):, :]),
+        ('left',   img[:, :int(w * 0.20), :]),
+        ('top',    img[:int(h * 0.20), :, :]),
+        ('bottom', img[int(h * 0.80):, :, :]),
+    ]
 
     paths = []
-    for name, rotated in [
-        ('ccw', cv2.rotate(strip, cv2.ROTATE_90_COUNTERCLOCKWISE)),
-        ('cw', cv2.rotate(strip, cv2.ROTATE_90_CLOCKWISE)),
-    ]:
-        sh, sw = rotated.shape[:2]
-        rotated = cv2.resize(rotated, (sw * 3, sh * 3), interpolation=cv2.INTER_CUBIC)
-        gray = _to_grayscale(rotated)
-        path = f"{output_dir}/{base}_strip_{name}.jpg"
-        cv2.imwrite(path, gray)
-        paths.append(path)
+    for edge_name, strip in edges:
+        for rot_name, rotated in [
+            ('ccw', cv2.rotate(strip, cv2.ROTATE_90_COUNTERCLOCKWISE)),
+            ('cw',  cv2.rotate(strip, cv2.ROTATE_90_CLOCKWISE)),
+        ]:
+            sh, sw = rotated.shape[:2]
+            rotated = cv2.resize(rotated, (sw * 5, sh * 5), interpolation=cv2.INTER_CUBIC)
+            gray = _to_grayscale(rotated)
+            path = f"{output_dir}/{base}_strip_{edge_name}_{rot_name}.jpg"
+            cv2.imwrite(path, gray)
+            paths.append(path)
 
-    print(f"  ✓ Правая полоса: 2 варианта поворота")
+    print(f"  ✓ Полосы 4 края: {len(paths)} вариантов")
     return paths
 
 
 def preprocess_mrz(image_path, output_dir='preprocessed'):
-    """Нижние ~25% изображения (MRZ зона)."""
+    """
+    MRZ может быть внизу (норма) или вверху (если документ перевёрнут 180°).
+    Кроп верхних 35% поворачиваем на 180° для корректного чтения.
+    Возвращает список путей — OCR проверит все кандидаты и выберет лучший.
+    """
     os.makedirs(output_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(image_path))[0]
     img = cv2.imread(image_path)
     if img is None:
-        return None
+        return []
 
     h, w = img.shape[:2]
-    crop = img[int(h * 0.75):, :]
-    ch, cw = crop.shape[:2]
-    crop = cv2.resize(crop, (cw * 3, ch * 3), interpolation=cv2.INTER_CUBIC)
-    gray = _to_grayscale(crop)
 
-    path = f"{output_dir}/{base}_mrz.jpg"
-    cv2.imwrite(path, gray)
-    print(f"  ✓ MRZ зона обработана")
-    return path
+    candidates = [
+        ('bottom', img[int(h * 0.65):, :]),                                      # нижние 35% (основной)
+        ('top',    cv2.rotate(img[:int(h * 0.35), :, :], cv2.ROTATE_180)),  # верхние 35°, повёрнутые 180°
+    ]
+
+    paths = []
+    for name, crop in candidates:
+        ch, cw = crop.shape[:2]
+        crop = cv2.resize(crop, (cw * 4, ch * 4), interpolation=cv2.INTER_CUBIC)
+        gray = _to_grayscale(crop)
+        path = f"{output_dir}/{base}_mrz_{name}.jpg"
+        cv2.imwrite(path, gray)
+        paths.append(path)
+
+    print(f"  ✓ MRZ: {len(paths)} кандидатов (bottom + top)")
+    return paths
 
 
 # ---------------------------------------------------------------------------
@@ -191,23 +333,37 @@ def ocr_digits(strip_paths):
     return best
 
 
-def ocr_mrz(mrz_path, full_path):
+def ocr_mrz(mrz_paths):
     """
-    MRZ зону обрабатываем отдельно (английский язык, whitelist).
-    Также добавляем строки из полного изображения (english run) как fallback.
+    MRZ через английский с whitelist.
+    Перебираем все кандидатные crop (bottom/top) × PSM (6/7).
+    Берём вариант с лучшим скором: count('<') + наличие PNRUS.
     """
-    lines = []
-    if mrz_path:
+    if not mrz_paths:
+        return []
+
+    best_lines = []
+    best_score = -1
+
+    for mrz_path in mrz_paths:
         img = cv2.imread(mrz_path, cv2.IMREAD_GRAYSCALE)
-        raw = pytesseract.image_to_string(img, lang='eng', config=CFG_MRZ)
-        lines += [l.strip() for l in raw.split('\n') if l.strip()]
+        if img is None:
+            continue
+        for cfg in (CFG_MRZ_BLOCK, CFG_MRZ_LINE):
+            raw = pytesseract.image_to_string(img, lang='eng', config=cfg)
+            lines = [l.strip() for l in raw.split('\n') if l.strip()]
+            text = ' '.join(lines)
 
-    # Fallback: полное изображение тоже через английский
-    img_full = cv2.imread(full_path, cv2.IMREAD_GRAYSCALE)
-    raw_full = pytesseract.image_to_string(img_full, lang='eng', config=CFG_MRZ)
-    lines += [l.strip() for l in raw_full.split('\n') if l.strip()]
+            score = text.count('<')
+            if 'PNRUS' in text or 'P<RUS' in text:
+                score += 100
 
-    return lines
+            print(f"  📝 MRZ {os.path.basename(mrz_path)} PSM={cfg.split()[1][-1]}: score={score}, lines={lines}")
+            if score > best_score:
+                best_score = score
+                best_lines = lines
+
+    return best_lines
 
 
 # ---------------------------------------------------------------------------
@@ -401,12 +557,21 @@ def main():
 
         try:
             # ----------------------------------------------------------
-            # ЭТАП 1: Препроцессинг
+            # ЭТАП 0: Document detection & cropping
+            # ----------------------------------------------------------
+            print("\n[0/4] Детектирование документа...")
+            cropped_doc_path = detect_and_crop_document(image_path)
+            if cropped_doc_path is None:
+                print("❌ Не удалось загрузить изображение")
+                continue
+
+            # ----------------------------------------------------------
+            # ЭТАП 1: Препроцессинг (работаем с cropped документом)
             # ----------------------------------------------------------
             print("\n[1/4] Препроцессинг...")
-            full_path = preprocess_full(image_path)
-            strip_paths = preprocess_right_strip(image_path)
-            mrz_path = preprocess_mrz(image_path)
+            full_path = preprocess_full(cropped_doc_path)
+            strip_paths = preprocess_edge_strips(cropped_doc_path)
+            mrz_paths = preprocess_mrz(cropped_doc_path)
 
             # ----------------------------------------------------------
             # ЭТАП 2: Tesseract OCR
@@ -418,7 +583,7 @@ def main():
             digits_str = ocr_digits(strip_paths)
             print(f"  ✓ Полоса цифр: '{digits_str}'")
 
-            mrz_lines = ocr_mrz(mrz_path, full_path)
+            mrz_lines = ocr_mrz(mrz_paths)
             print(f"  ✓ MRZ: {len(mrz_lines)} строк")
 
             # ----------------------------------------------------------

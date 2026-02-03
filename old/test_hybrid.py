@@ -86,6 +86,96 @@ def parse_mrz_date(six_digits):
 
 
 # ---------------------------------------------------------------------------
+# Document detection & cropping
+# ---------------------------------------------------------------------------
+def order_points(pts):
+    """Упорядочиваем 4 точки: top-left, top-right, bottom-right, bottom-left."""
+    rect = np.zeros((4, 2), dtype='float32')
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]   # top-left
+    rect[2] = pts[np.argmax(s)]   # bottom-right
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # top-right
+    rect[3] = pts[np.argmax(diff)]  # bottom-left
+    return rect
+
+
+def detect_and_crop_document(image_path, output_dir='preprocessed'):
+    """
+    Детектирует документ в кадре, применяет perspective transform.
+    Сохраняет выровненный crop и возвращает путь к нему.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(image_path))[0]
+
+    img = cv2.imread(image_path)
+    if img is None:
+        return None
+
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blurred, 50, 200)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(closed.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    doc_contour = None
+    max_area = 0
+
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < (w * h * 0.3):
+            continue
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4 and area > max_area:
+            max_area = area
+            doc_contour = approx
+
+    if doc_contour is None:
+        print("  ⚠️  Документ не детектирован, используем полное изображение")
+        cropped_path = f"{output_dir}/{base}_cropped.jpg"
+        cv2.imwrite(cropped_path, img)
+        return cropped_path
+
+    pts = doc_contour.reshape(4, 2)
+    rect = order_points(pts)
+    (tl, tr, br, bl) = rect
+
+    widthA = np.linalg.norm(br - bl)
+    widthB = np.linalg.norm(tr - tl)
+    maxWidth = max(int(widthA), int(widthB))
+
+    heightA = np.linalg.norm(tr - br)
+    heightB = np.linalg.norm(tl - bl)
+    maxHeight = max(int(heightA), int(heightB))
+
+    dst = np.array([
+        [0, 0],
+        [maxWidth - 1, 0],
+        [maxWidth - 1, maxHeight - 1],
+        [0, maxHeight - 1]
+    ], dtype='float32')
+
+    M = cv2.getPerspectiveTransform(rect, dst)
+    warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
+
+    # Паспорт РФ — формат А5 (портрейт: высота > ширина).
+    # Если после perspective transform получилась ландшафтная ориентация —
+    # контур был определён в повёрнутом состоянии. Поворачиваем в портрейт.
+    wh, ww = warped.shape[:2]
+    if ww > wh:
+        warped = cv2.rotate(warped, cv2.ROTATE_90_CLOCKWISE)
+        print(f"  ↻ Портрейт: {ww}x{wh} → {warped.shape[1]}x{warped.shape[0]}")
+
+    print(f"  ✓ Документ детектирован и выровнен: {w}x{h} → {warped.shape[1]}x{warped.shape[0]}")
+    cropped_path = f"{output_dir}/{base}_cropped.jpg"
+    cv2.imwrite(cropped_path, warped)
+    return cropped_path
+
+
+# ---------------------------------------------------------------------------
 # Препроцессинг (binary для EasyOCR, grayscale для Tesseract)
 # ---------------------------------------------------------------------------
 def _to_binary(img_bgr):
@@ -99,12 +189,11 @@ def _to_binary(img_bgr):
 
 
 def _to_grayscale(img_bgr):
-    """BGR -> gray -> denoise -> CLAHE. Без бинаризации (для Tesseract)."""
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-    return gray
+    """
+    Чистое серое изображение для Tesseract 4+ LSTM.
+    LSTM использует полутоны напрямую — denoise/CLAHE размывают буквы.
+    """
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
 
 def _preprocess(img_bgr, binary=True):
@@ -120,8 +209,10 @@ def preprocess_full(image_path, output_dir='preprocessed', binary=True):
         raise ValueError(f"Не удалось загрузить: {image_path}")
 
     h, w = img.shape[:2]
-    if w < 2000:
-        scale = 2000 / w
+    # 3x или минимум 3000px — для Tesseract LSTM нужно минимум 300 DPI эквивалент
+    target_w = max(w * 3, 3000)
+    if target_w > w:
+        scale = target_w / w
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
         print(f"  ↗ upscale {w}x{h} → {img.shape[1]}x{img.shape[0]}")
 
@@ -133,8 +224,8 @@ def preprocess_full(image_path, output_dir='preprocessed', binary=True):
     return path
 
 
-def preprocess_right_strip(image_path, output_dir='preprocessed', binary=True):
-    """Правая полоса (~15%), два поворота (90°/270°)."""
+def preprocess_edge_strips(image_path, output_dir='preprocessed', binary=True):
+    """4 края × 2 ротации = 8 вариантов для поиска серии/номера."""
     os.makedirs(output_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(image_path))[0]
     img = cv2.imread(image_path)
@@ -142,53 +233,69 @@ def preprocess_right_strip(image_path, output_dir='preprocessed', binary=True):
         return []
 
     h, w = img.shape[:2]
-    strip = img[:, int(w * 0.85):, :]
+
+    edges = [
+        ('right',  img[:, int(w * 0.80):, :]),
+        ('left',   img[:, :int(w * 0.20), :]),
+        ('top',    img[:int(h * 0.20), :, :]),
+        ('bottom', img[int(h * 0.80):, :, :]),
+    ]
 
     suffix = 'bin' if binary else 'gray'
     paths = []
-    for name, rotated in [
-        ('ccw', cv2.rotate(strip, cv2.ROTATE_90_COUNTERCLOCKWISE)),
-        ('cw',  cv2.rotate(strip, cv2.ROTATE_90_CLOCKWISE)),
-    ]:
-        sh, sw = rotated.shape[:2]
-        rotated = cv2.resize(rotated, (sw * 3, sh * 3), interpolation=cv2.INTER_CUBIC)
-        processed = _preprocess(rotated, binary)
-        path = f"{output_dir}/{base}_strip_{name}_{suffix}.jpg"
-        cv2.imwrite(path, processed)
-        paths.append(path)
+    for edge_name, strip in edges:
+        for rot_name, rotated in [
+            ('ccw', cv2.rotate(strip, cv2.ROTATE_90_COUNTERCLOCKWISE)),
+            ('cw',  cv2.rotate(strip, cv2.ROTATE_90_CLOCKWISE)),
+        ]:
+            sh, sw = rotated.shape[:2]
+            rotated = cv2.resize(rotated, (sw * 5, sh * 5), interpolation=cv2.INTER_CUBIC)
+            processed = _preprocess(rotated, binary)
+            path = f"{output_dir}/{base}_strip_{edge_name}_{rot_name}_{suffix}.jpg"
+            cv2.imwrite(path, processed)
+            paths.append(path)
 
-    print(f"  ✓ Правая полоса: 2 варианта поворота ({suffix})")
+    print(f"  ✓ Полосы 4 края: {len(paths)} вариантов ({suffix})")
     return paths
 
 
 def preprocess_mrz(image_path, output_dir='preprocessed', binary=True):
-    """Нижние ~25% изображения (MRZ)."""
+    """MRZ кандидаты: нижние 35% + верхние 35% (повёрнутые 180°). Список путей."""
     os.makedirs(output_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(image_path))[0]
     img = cv2.imread(image_path)
     if img is None:
-        return None
+        return []
 
     h, w = img.shape[:2]
-    crop = img[int(h * 0.75):, :]
-    ch, cw = crop.shape[:2]
-    crop = cv2.resize(crop, (cw * 3, ch * 3), interpolation=cv2.INTER_CUBIC)
+
+    candidates = [
+        ('bottom', img[int(h * 0.65):, :]),                                      # нижние 35% (основной)
+        ('top',    cv2.rotate(img[:int(h * 0.35), :, :], cv2.ROTATE_180)),  # верхние 35%, повёрнутые 180°
+    ]
 
     suffix = 'bin' if binary else 'gray'
-    processed = _preprocess(crop, binary)
-    path = f"{output_dir}/{base}_mrz_{suffix}.jpg"
-    cv2.imwrite(path, processed)
-    print(f"  ✓ MRZ зона ({suffix})")
-    return path
+    paths = []
+    for name, crop in candidates:
+        ch, cw = crop.shape[:2]
+        crop = cv2.resize(crop, (cw * 4, ch * 4), interpolation=cv2.INTER_CUBIC)
+        processed = _preprocess(crop, binary)
+        path = f"{output_dir}/{base}_mrz_{name}_{suffix}.jpg"
+        cv2.imwrite(path, processed)
+        paths.append(path)
+
+    print(f"  ✓ MRZ: {len(paths)} кандидатов ({suffix})")
+    return paths
 
 
 # ---------------------------------------------------------------------------
 # Tesseract конфигурации
 # ---------------------------------------------------------------------------
-CFG_DIGITS_LINE  = "--psm 7 -c tessedit_char_whitelist=0123456789"
-CFG_DIGITS_BLOCK = "--psm 11 -c tessedit_char_whitelist=0123456789"
-CFG_MRZ          = "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
-CFG_RUSSIAN      = "--psm 6"
+CFG_DIGITS_LINE  = "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789"
+CFG_DIGITS_BLOCK = "--oem 3 --psm 11 -c tessedit_char_whitelist=0123456789"
+CFG_MRZ_BLOCK    = "--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
+CFG_MRZ_LINE     = "--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
+CFG_RUSSIAN      = "--oem 3 --psm 3"
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +305,8 @@ CFG_RUSSIAN      = "--psm 6"
 #   digits_str    : str         — все цифры из правой полосы
 #   mrz_lines     : [str, ...]  — строки MRZ (+ fallback из full)
 # ---------------------------------------------------------------------------
-def run_easyocr(reader, full_path, strip_paths, mrz_path):
-    """EasyOCR на все три зоны."""
+def run_easyocr(reader, full_path, strip_paths, mrz_paths):
+    """EasyOCR на все зоны. mrz_paths — список кандидатов."""
     lines_full = reader.readtext(full_path)
     russian_lines = [text for _, text, _ in lines_full]
 
@@ -213,21 +320,23 @@ def run_easyocr(reader, full_path, strip_paths, mrz_path):
         if len(variant_digits) > len(digits_str):
             digits_str = variant_digits
 
-    # MRZ + fallback из full
-    lines_mrz = reader.readtext(mrz_path) if mrz_path else []
-    mrz_lines = [text for _, text, _ in lines_mrz] + russian_lines
+    # MRZ: все кандидаты + fallback из full
+    all_mrz_raw = []
+    for mp in mrz_paths:
+        all_mrz_raw.extend(reader.readtext(mp))
+    mrz_lines = [text for _, text, _ in all_mrz_raw] + russian_lines
 
     return russian_lines, digits_str, mrz_lines
 
 
-def run_tesseract(full_path, strip_paths, mrz_path):
-    """Tesseract на все три зоны."""
+def run_tesseract(full_path, strip_paths, mrz_paths):
+    """Tesseract на все зоны. mrz_paths — список кандидатов."""
     # Полное изображение — русский
     img = cv2.imread(full_path, cv2.IMREAD_GRAYSCALE)
     raw = pytesseract.image_to_string(img, lang='rus', config=CFG_RUSSIAN)
     russian_lines = [l.strip() for l in raw.split('\n') if l.strip()]
 
-    # Полоса — цифры (2 PSM × 2 поворота, берём лучший)
+    # Полоса — цифры (2 PSM × 8 полос, берём лучший)
     digits_str = ''
     for sp in strip_paths:
         img = cv2.imread(sp, cv2.IMREAD_GRAYSCALE)
@@ -237,16 +346,23 @@ def run_tesseract(full_path, strip_paths, mrz_path):
             if len(digits) > len(digits_str):
                 digits_str = digits
 
-    # MRZ + fallback из full (english run)
+    # MRZ: все кандидаты × PSM (6/7), берём по скору
     mrz_lines = []
-    if mrz_path:
+    best_score = -1
+    for mrz_path in mrz_paths:
         img = cv2.imread(mrz_path, cv2.IMREAD_GRAYSCALE)
-        raw = pytesseract.image_to_string(img, lang='eng', config=CFG_MRZ)
-        mrz_lines += [l.strip() for l in raw.split('\n') if l.strip()]
-
-    img_full = cv2.imread(full_path, cv2.IMREAD_GRAYSCALE)
-    raw_full = pytesseract.image_to_string(img_full, lang='eng', config=CFG_MRZ)
-    mrz_lines += [l.strip() for l in raw_full.split('\n') if l.strip()]
+        if img is None:
+            continue
+        for cfg in (CFG_MRZ_BLOCK, CFG_MRZ_LINE):
+            raw = pytesseract.image_to_string(img, lang='eng', config=cfg)
+            lines = [l.strip() for l in raw.split('\n') if l.strip()]
+            text = ' '.join(lines)
+            score = text.count('<')
+            if 'PNRUS' in text or 'P<RUS' in text:
+                score += 100
+            if score > best_score:
+                best_score = score
+                mrz_lines = lines
 
     return russian_lines, digits_str, mrz_lines
 
@@ -584,22 +700,31 @@ def main():
 
         try:
             # ----------------------------------------------------------
+            # ЭТАП 0: Document detection & cropping
+            # ----------------------------------------------------------
+            print("\n[0/5] Детектирование документа...")
+            cropped_doc_path = detect_and_crop_document(image_path)
+            if cropped_doc_path is None:
+                print("❌ Не удалось загрузить изображение")
+                continue
+
+            # ----------------------------------------------------------
             # ЭТАП 1: Препроцессинг (binary для EasyOCR, grayscale для Tesseract)
             # ----------------------------------------------------------
             print("\n[1/5] Препроцессинг...")
-            easy_full_path   = preprocess_full(image_path, binary=True)
-            easy_strip_paths = preprocess_right_strip(image_path, binary=True)
-            easy_mrz_path    = preprocess_mrz(image_path, binary=True)
-            tess_full_path   = preprocess_full(image_path, binary=False)
-            tess_strip_paths = preprocess_right_strip(image_path, binary=False)
-            tess_mrz_path    = preprocess_mrz(image_path, binary=False)
+            easy_full_path    = preprocess_full(cropped_doc_path, binary=True)
+            easy_strip_paths  = preprocess_edge_strips(cropped_doc_path, binary=True)
+            easy_mrz_paths    = preprocess_mrz(cropped_doc_path, binary=True)
+            tess_full_path    = preprocess_full(cropped_doc_path, binary=False)
+            tess_strip_paths  = preprocess_edge_strips(cropped_doc_path, binary=False)
+            tess_mrz_paths    = preprocess_mrz(cropped_doc_path, binary=False)
 
             # ----------------------------------------------------------
             # ЭТАП 2: EasyOCR (на бинаризованных изображениях)
             # ----------------------------------------------------------
             print("\n[2/5] EasyOCR...")
             easy_russian, easy_digits, easy_mrz = run_easyocr(
-                reader, easy_full_path, easy_strip_paths, easy_mrz_path)
+                reader, easy_full_path, easy_strip_paths, easy_mrz_paths)
             print(f"  ✓ Русский текст: {len(easy_russian)} строк")
             print(f"  ✓ Цифры полосы:  '{easy_digits}'")
             print(f"  ✓ MRZ:           {len(easy_mrz)} строк")
@@ -609,7 +734,7 @@ def main():
             # ----------------------------------------------------------
             print("\n[3/5] Tesseract...")
             tess_russian, tess_digits, tess_mrz = run_tesseract(
-                tess_full_path, tess_strip_paths, tess_mrz_path)
+                tess_full_path, tess_strip_paths, tess_mrz_paths)
             print(f"  ✓ Русский текст: {len(tess_russian)} строк")
             print(f"  ✓ Цифры полосы:  '{tess_digits}'")
             print(f"  ✓ MRZ:           {len(tess_mrz)} строк")
