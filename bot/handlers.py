@@ -10,7 +10,8 @@ from config import settings
 from db.database import get_db
 from db.repository import PassportRepository
 from ocr.provider import get_ocr_provider
-from services import ImageProcessor, PdfProcessor, PassportExtractor, ExportService
+from ocr.hybrid import HybridRecognizer
+from services import ImageProcessor, PdfProcessor, ExportService
 from bot.keyboards import get_export_keyboard
 from utils.logger import get_logger
 from utils.passport_formatter import format_passport_type1, format_passport_type2
@@ -132,7 +133,7 @@ async def handle_photo(message: Message, bot: Bot):
         await message.answer("Файл слишком большой. Максимальный размер: 20 МБ")
         return
 
-    status_msg = await message.answer("Обрабатываю фото...")
+    status_msg = await message.answer("Обрабатываю фото (гибридное распознавание)...")
 
     try:
         # Download photo
@@ -197,7 +198,7 @@ async def handle_document(message: Message, bot: Bot):
         )
         return
 
-    status_msg = await message.answer("Обрабатываю документ...")
+    status_msg = await message.answer("Обрабатываю документ (гибридное распознавание)...")
 
     try:
         # Download document
@@ -237,6 +238,17 @@ async def handle_document(message: Message, bot: Bot):
 
 # --- Processing Functions ---
 
+def _format_modules_used(modules: list[str]) -> str:
+    """Format module names for display."""
+    labels = {
+        'rupasportread': 'Tesseract MRZ',
+        'easyocr': 'EasyOCR',
+        'yandex_ocr': 'Yandex OCR',
+        'none': '-',
+    }
+    return ' + '.join(labels.get(m, m) for m in modules)
+
+
 async def process_image(
     image_bytes: bytes,
     source_type: str,
@@ -247,22 +259,24 @@ async def process_image(
     message: Message,
     status_msg: Message
 ):
-    """Process a single image."""
+    """Process a single image through the hybrid OCR pipeline."""
     try:
         # Normalize image
         processor = ImageProcessor()
         normalized_bytes, mime_type = processor.normalize_image(image_bytes)
 
-        # OCR with rotation heuristic
-        ocr_provider = get_ocr_provider()
-        extractor = PassportExtractor(ocr_provider)
-        ocr_result = await extractor.extract_with_rotation(normalized_bytes, mime_type)
+        # Hybrid OCR recognition
+        yandex_provider = get_ocr_provider()
+        recognizer = HybridRecognizer(yandex_provider=yandex_provider)
+        hybrid_result = await recognizer.recognize(normalized_bytes, mime_type)
+
+        passport_data = hybrid_result.passport_data
+        modules_used = hybrid_result.modules_used
 
         # Save to database
         async for session in get_db():
             repo = PassportRepository(session)
 
-            passport_data = ocr_result.passport_data
             quality_score = passport_data.count_filled_fields()
 
             record = await repo.create(
@@ -282,7 +296,7 @@ async def process_image(
                 gender=passport_data.gender,
                 birth_date=passport_data.birth_date,
                 birth_place=passport_data.birth_place,
-                raw_payload=ocr_result.raw_response,
+                raw_payload=hybrid_result.raw_response,
                 quality_score=quality_score,
             )
 
@@ -297,6 +311,8 @@ async def process_image(
             format1 = format_passport_type1(passport_data)
             format2 = format_passport_type2(passport_data)
 
+            modules_str = _format_modules_used(modules_used)
+
             response_text = (
                 f"✅ Распознавание завершено\n\n"
                 f"📝 ID записи: {record.id}\n"
@@ -310,7 +326,8 @@ async def process_image(
                 f"Выдан: {passport_data.issued_by or 'не найдено'}\n"
                 f"Дата выдачи: {passport_data.issue_date or 'не найдено'}\n"
                 f"Код подразделения: {passport_data.subdivision_code or 'не найдено'}\n\n"
-                f"📊 Заполнено полей: {quality_score}/10\n\n"
+                f"📊 Заполнено полей: {quality_score}/10\n"
+                f"🔧 Модули: {modules_str}\n\n"
                 f"🔐 Закодированные форматы:\n"
                 f"<code>{format1}</code>\n\n"
                 f"<code>{format2}</code>"
@@ -350,23 +367,29 @@ async def process_pdf(
 
         # Process each page
         for image_bytes, page_index in pages:
-            page_status = await message.answer(f"Обрабатываю страницу {page_index + 1}...")
+            page_status = await message.answer(
+                f"Обрабатываю страницу {page_index + 1} (гибридное распознавание)..."
+            )
 
             try:
                 # Normalize image
                 processor = ImageProcessor()
                 normalized_bytes, mime_type = processor.normalize_image(image_bytes)
 
-                # OCR with rotation heuristic
-                ocr_provider = get_ocr_provider()
-                extractor = PassportExtractor(ocr_provider)
-                ocr_result = await extractor.extract_with_rotation(normalized_bytes, mime_type)
+                # Hybrid OCR
+                yandex_provider = get_ocr_provider()
+                recognizer = HybridRecognizer(yandex_provider=yandex_provider)
+                hybrid_result = await recognizer.recognize(
+                    normalized_bytes, mime_type
+                )
+
+                passport_data = hybrid_result.passport_data
+                modules_used = hybrid_result.modules_used
 
                 # Save to database
                 async for session in get_db():
                     repo = PassportRepository(session)
 
-                    passport_data = ocr_result.passport_data
                     quality_score = passport_data.count_filled_fields()
 
                     record = await repo.create(
@@ -386,7 +409,7 @@ async def process_pdf(
                         gender=passport_data.gender,
                         birth_date=passport_data.birth_date,
                         birth_place=passport_data.birth_place,
-                        raw_payload=ocr_result.raw_response,
+                        raw_payload=hybrid_result.raw_response,
                         quality_score=quality_score,
                     )
 
@@ -401,13 +424,16 @@ async def process_pdf(
                     format1 = format_passport_type1(passport_data)
                     format2 = format_passport_type2(passport_data)
 
+                    modules_str = _format_modules_used(modules_used)
+
                     response_text = (
                         f"✅ Страница {page_index + 1} обработана\n\n"
                         f"📝 ID записи: {record.id}\n\n"
                         f"📋 Данные:\n"
                         f"ФИО: {full_name}\n"
                         f"Серия и номер: {passport_data.passport_number or 'не найдено'}\n"
-                        f"Заполнено полей: {quality_score}/10\n\n"
+                        f"Заполнено полей: {quality_score}/10\n"
+                        f"🔧 Модули: {modules_str}\n\n"
                         f"🔐 Закодированные форматы:\n"
                         f"<code>{format1}</code>\n\n"
                         f"<code>{format2}</code>"

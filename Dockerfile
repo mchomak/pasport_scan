@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies (including Tesseract OCR for rupasportread)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxext6 \
     libxrender-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
