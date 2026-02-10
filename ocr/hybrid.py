@@ -17,11 +17,14 @@ import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import json
+
 from ocr.models import OcrResult, PassportData
-from utils.logger import get_logger
+from utils.logger import get_logger, get_file_logger
 from utils.passport_formatter import transliterate_to_latin
 
 logger = get_logger(__name__)
+debug_log = get_file_logger("hybrid.debug")
 
 # Lazy-loaded EasyOCR reader (expensive to init, keep in memory)
 _easyocr_reader = None
@@ -46,11 +49,14 @@ class HybridResult:
         modules_used: List[str],
         raw_response: dict,
         field_providers: Optional[dict] = None,
+        per_module_data: Optional[dict] = None,
     ):
         self.passport_data = passport_data
         self.modules_used = modules_used
         self.raw_response = raw_response
         self.field_providers = field_providers or {}
+        # {module_name: PassportData} — full data each module found independently
+        self.per_module_data: dict[str, PassportData] = per_module_data or {}
 
 
 class HybridRecognizer:
@@ -262,6 +268,12 @@ class HybridRecognizer:
     # ------------------------------------------------------------------
     # Main pipeline
     # ------------------------------------------------------------------
+    @staticmethod
+    def _passport_data_to_debug_dict(data: PassportData) -> dict:
+        """Serialize PassportData for debug logging (dates -> str)."""
+        return {k: str(v) if v is not None else None
+                for k, v in data.model_dump().items()}
+
     async def recognize(
         self,
         image_bytes: bytes,
@@ -271,12 +283,18 @@ class HybridRecognizer:
         Run the hybrid recognition pipeline.
 
         Returns HybridResult with passport_data, modules_used list,
-        raw_response dict, and field_providers mapping.
+        raw_response dict, field_providers mapping,
+        and per_module_data with full data each module found.
         """
         modules_used: List[str] = []
         current_data = PassportData()
         raw_responses: dict = {}
         field_providers: dict = {}
+        per_module_data: dict[str, PassportData] = {}
+
+        debug_log.debug("=" * 60)
+        debug_log.debug("HYBRID PIPELINE START  image_size=%d  mime=%s",
+                        len(image_bytes), mime_type)
 
         # ---- Priority 1: rupasportread (Tesseract MRZ) ----
         logger.info("Hybrid: [1/3] rupasportread...")
@@ -286,6 +304,14 @@ class HybridRecognizer:
 
         if rpr_result:
             rpr_data = self._rupasportread_to_passport_data(rpr_result)
+            per_module_data["rupasportread"] = rpr_data
+
+            debug_log.debug("[rupasportread] raw_result=%s",
+                           json.dumps(rpr_result, ensure_ascii=False, default=str))
+            debug_log.debug("[rupasportread] parsed=%s",
+                           json.dumps(self._passport_data_to_debug_dict(rpr_data),
+                                      ensure_ascii=False))
+
             filled_before = self._get_filled_fields(current_data)
             current_data = self._merge(current_data, rpr_data)
             filled_after = self._get_filled_fields(current_data)
@@ -301,6 +327,7 @@ class HybridRecognizer:
                 new_fields=list(new_fields),
             )
         else:
+            debug_log.debug("[rupasportread] returned None")
             logger.info("rupasportread: no result")
 
         # ---- Priority 2: EasyOCR (if essential fields still missing) ----
@@ -311,6 +338,12 @@ class HybridRecognizer:
             )
 
             if easyocr_data:
+                per_module_data["easyocr"] = easyocr_data
+
+                debug_log.debug("[easyocr] parsed=%s",
+                               json.dumps(self._passport_data_to_debug_dict(easyocr_data),
+                                          ensure_ascii=False))
+
                 filled_before = self._get_filled_fields(current_data)
                 current_data = self._merge(current_data, easyocr_data)
                 filled_after = self._get_filled_fields(current_data)
@@ -328,7 +361,10 @@ class HybridRecognizer:
                     new_fields=list(new_fields),
                 )
             else:
+                debug_log.debug("[easyocr] returned None")
                 logger.info("EasyOCR: no result")
+        else:
+            debug_log.debug("[easyocr] SKIPPED — all essential fields filled")
 
         # ---- Priority 3: Yandex OCR (last resort) ----
         if (
@@ -356,6 +392,18 @@ class HybridRecognizer:
                     ):
                         yd.middle_name = transliterate_to_latin(yd.middle_name)
 
+                    per_module_data["yandex_ocr"] = yd
+
+                    debug_log.debug("[yandex_ocr] parsed=%s",
+                                   json.dumps(self._passport_data_to_debug_dict(yd),
+                                              ensure_ascii=False))
+                    debug_log.debug("[yandex_ocr] raw_entities=%s",
+                                   json.dumps(
+                                       yandex_result.raw_response.get("result", {})
+                                       .get("textAnnotation", {})
+                                       .get("entities", []),
+                                       ensure_ascii=False, default=str))
+
                     filled_before = self._get_filled_fields(current_data)
                     current_data = self._merge(current_data, yd)
                     filled_after = self._get_filled_fields(current_data)
@@ -370,14 +418,29 @@ class HybridRecognizer:
                         new_fields=list(new_fields),
                     )
             except Exception as e:
+                debug_log.debug("[yandex_ocr] EXCEPTION: %s", e, exc_info=True)
                 logger.error("Yandex OCR failed", error=str(e))
+        else:
+            if self._count_essential(current_data) >= len(self.ESSENTIAL_FIELDS):
+                debug_log.debug("[yandex_ocr] SKIPPED — all essential fields filled")
+            elif not self.yandex_provider:
+                debug_log.debug("[yandex_ocr] SKIPPED — no provider configured")
 
         if not modules_used:
             modules_used.append("none")
+
+        # Final debug summary
+        debug_log.debug("MERGED RESULT: %s",
+                        json.dumps(self._passport_data_to_debug_dict(current_data),
+                                   ensure_ascii=False))
+        debug_log.debug("FIELD PROVIDERS: %s", field_providers)
+        debug_log.debug("MODULES USED: %s", modules_used)
+        debug_log.debug("=" * 60)
 
         return HybridResult(
             passport_data=current_data,
             modules_used=modules_used,
             raw_response=raw_responses,
             field_providers=field_providers,
+            per_module_data=per_module_data,
         )

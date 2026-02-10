@@ -245,6 +245,8 @@ _PROVIDER_LABELS = {
     'none': '-',
 }
 
+_PROVIDER_ORDER = ['rupasportread', 'easyocr', 'yandex_ocr']
+
 _FIELD_LABELS = {
     'surname': 'Фамилия',
     'name': 'Имя',
@@ -264,53 +266,56 @@ def _format_modules_used(modules: list[str]) -> str:
     return ' + '.join(_PROVIDER_LABELS.get(m, m) for m in modules)
 
 
+def _format_module_block(module_key: str, data) -> str:
+    """Format a single module's full results (all fields)."""
+    label = _PROVIDER_LABELS.get(module_key, module_key)
+    lines = [f"[{label}]"]
+    found_any = False
+    for field_name, field_label in _FIELD_LABELS.items():
+        val = getattr(data, field_name, None)
+        if val is not None and str(val).strip():
+            lines.append(f"  + {field_label}: {val}")
+            found_any = True
+        else:
+            lines.append(f"  - {field_label}: ---")
+    if not found_any:
+        lines.append("  (ничего не найдено)")
+    return '\n'.join(lines)
+
+
 def _format_provider_details(
     passport_data,
     field_providers: dict,
     modules_used: list[str],
+    per_module_data: dict,
 ) -> str:
-    """Build a detailed per-field provider attribution block."""
-    # Group fields by provider (in pipeline order)
-    provider_order = ['rupasportread', 'easyocr', 'yandex_ocr']
-    by_provider: dict[str, list[str]] = {}
-    not_found: list[str] = []
-
-    for field_name, label in _FIELD_LABELS.items():
-        val = getattr(passport_data, field_name, None)
-        if val is not None and str(val).strip():
-            provider = field_providers.get(field_name, '?')
-            by_provider.setdefault(provider, []).append(
-                f"  {label}: {val}"
-            )
-        else:
-            not_found.append(f"  {label}")
-
+    """Build full per-module data blocks + final merged result."""
     lines: list[str] = []
-    for provider in provider_order:
-        fields = by_provider.pop(provider, None)
-        if fields:
-            plabel = _PROVIDER_LABELS.get(provider, provider)
-            lines.append(f"[{plabel}]")
-            lines.extend(fields)
+
+    # Per-module blocks — show what each module found independently
+    for module_key in _PROVIDER_ORDER:
+        if module_key in per_module_data:
+            lines.append(_format_module_block(module_key, per_module_data[module_key]))
             lines.append("")
 
-    # Any remaining unknown providers
-    for provider, fields in by_provider.items():
-        plabel = _PROVIDER_LABELS.get(provider, provider)
-        lines.append(f"[{plabel}]")
-        lines.extend(fields)
+    # Modules that were skipped
+    skipped = [
+        _PROVIDER_LABELS.get(m, m) for m in _PROVIDER_ORDER
+        if m not in per_module_data
+    ]
+    if skipped:
+        lines.append(f"Пропущены: {', '.join(skipped)}")
         lines.append("")
 
-    if not_found:
-        lines.append("[Не найдено]")
-        lines.extend(not_found)
-        lines.append("")
-
-    # Summary line: which modules were invoked
-    invoked = ', '.join(
-        _PROVIDER_LABELS.get(m, m) for m in modules_used if m != 'none'
-    )
-    lines.append(f"Использованные модули: {invoked or '-'}")
+    # Final merged result with source attribution
+    lines.append("[Итог (объединённые данные)]")
+    for field_name, field_label in _FIELD_LABELS.items():
+        val = getattr(passport_data, field_name, None)
+        if val is not None and str(val).strip():
+            src = _PROVIDER_LABELS.get(field_providers.get(field_name, '?'), '?')
+            lines.append(f"  {field_label}: {val}  ({src})")
+        else:
+            lines.append(f"  {field_label}: --- не найдено")
 
     return '\n'.join(lines)
 
@@ -375,6 +380,7 @@ async def process_image(
                 passport_data,
                 hybrid_result.field_providers,
                 modules_used,
+                hybrid_result.per_module_data,
             )
 
             response_text = (
@@ -477,6 +483,7 @@ async def process_pdf(
                         passport_data,
                         hybrid_result.field_providers,
                         modules_used,
+                        hybrid_result.per_module_data,
                     )
 
                     response_text = (
