@@ -238,15 +238,81 @@ async def handle_document(message: Message, bot: Bot):
 
 # --- Processing Functions ---
 
+_PROVIDER_LABELS = {
+    'rupasportread': 'Tesseract MRZ',
+    'easyocr': 'EasyOCR',
+    'yandex_ocr': 'Yandex OCR',
+    'none': '-',
+}
+
+_FIELD_LABELS = {
+    'surname': 'Фамилия',
+    'name': 'Имя',
+    'middle_name': 'Отчество',
+    'passport_number': 'Серия и номер',
+    'birth_date': 'Дата рождения',
+    'issue_date': 'Дата выдачи',
+    'gender': 'Пол',
+    'birth_place': 'Место рождения',
+    'issued_by': 'Кем выдан',
+    'subdivision_code': 'Код подразделения',
+}
+
+
 def _format_modules_used(modules: list[str]) -> str:
     """Format module names for display."""
-    labels = {
-        'rupasportread': 'Tesseract MRZ',
-        'easyocr': 'EasyOCR',
-        'yandex_ocr': 'Yandex OCR',
-        'none': '-',
-    }
-    return ' + '.join(labels.get(m, m) for m in modules)
+    return ' + '.join(_PROVIDER_LABELS.get(m, m) for m in modules)
+
+
+def _format_provider_details(
+    passport_data,
+    field_providers: dict,
+    modules_used: list[str],
+) -> str:
+    """Build a detailed per-field provider attribution block."""
+    # Group fields by provider (in pipeline order)
+    provider_order = ['rupasportread', 'easyocr', 'yandex_ocr']
+    by_provider: dict[str, list[str]] = {}
+    not_found: list[str] = []
+
+    for field_name, label in _FIELD_LABELS.items():
+        val = getattr(passport_data, field_name, None)
+        if val is not None and str(val).strip():
+            provider = field_providers.get(field_name, '?')
+            by_provider.setdefault(provider, []).append(
+                f"  {label}: {val}"
+            )
+        else:
+            not_found.append(f"  {label}")
+
+    lines: list[str] = []
+    for provider in provider_order:
+        fields = by_provider.pop(provider, None)
+        if fields:
+            plabel = _PROVIDER_LABELS.get(provider, provider)
+            lines.append(f"[{plabel}]")
+            lines.extend(fields)
+            lines.append("")
+
+    # Any remaining unknown providers
+    for provider, fields in by_provider.items():
+        plabel = _PROVIDER_LABELS.get(provider, provider)
+        lines.append(f"[{plabel}]")
+        lines.extend(fields)
+        lines.append("")
+
+    if not_found:
+        lines.append("[Не найдено]")
+        lines.extend(not_found)
+        lines.append("")
+
+    # Summary line: which modules were invoked
+    invoked = ', '.join(
+        _PROVIDER_LABELS.get(m, m) for m in modules_used if m != 'none'
+    )
+    lines.append(f"Использованные модули: {invoked or '-'}")
+
+    return '\n'.join(lines)
 
 
 async def process_image(
@@ -300,40 +366,29 @@ async def process_image(
                 quality_score=quality_score,
             )
 
-            # Format response
-            full_name = " ".join(filter(None, [
-                passport_data.surname,
-                passport_data.name,
-                passport_data.middle_name
-            ])) or "не найдено"
-
             # Generate encoded formats
             format1 = format_passport_type1(passport_data)
             format2 = format_passport_type2(passport_data)
 
-            modules_str = _format_modules_used(modules_used)
+            # Build detailed provider attribution
+            provider_details = _format_provider_details(
+                passport_data,
+                hybrid_result.field_providers,
+                modules_used,
+            )
 
             response_text = (
-                f"✅ Распознавание завершено\n\n"
-                f"📝 ID записи: {record.id}\n"
-                f"👤 Пользователь: {tg_user_id}\n\n"
-                f"📋 Данные паспорта:\n"
-                f"ФИО: {full_name}\n"
-                f"Серия и номер: {passport_data.passport_number or 'не найдено'}\n"
-                f"Дата рождения: {passport_data.birth_date or 'не найдено'}\n"
-                f"Место рождения: {passport_data.birth_place or 'не найдено'}\n"
-                f"Пол: {passport_data.gender or 'не найдено'}\n"
-                f"Выдан: {passport_data.issued_by or 'не найдено'}\n"
-                f"Дата выдачи: {passport_data.issue_date or 'не найдено'}\n"
-                f"Код подразделения: {passport_data.subdivision_code or 'не найдено'}\n\n"
-                f"📊 Заполнено полей: {quality_score}/10\n"
-                f"🔧 Модули: {modules_str}\n\n"
-                f"🔐 Закодированные форматы:\n"
+                f"Распознавание завершено\n\n"
+                f"ID записи: {record.id}\n"
+                f"Заполнено полей: {quality_score}/10\n\n"
+                f"--- Детализация по провайдерам ---\n"
+                f"{provider_details}\n\n"
+                f"--- Закодированные форматы ---\n"
                 f"<code>{format1}</code>\n\n"
                 f"<code>{format2}</code>"
             )
 
-            await status_msg.edit_text(response_text)
+            await status_msg.edit_text(response_text, parse_mode="HTML")
             break
 
     except Exception as e:
@@ -413,33 +468,29 @@ async def process_pdf(
                         quality_score=quality_score,
                     )
 
-                    # Format response
-                    full_name = " ".join(filter(None, [
-                        passport_data.surname,
-                        passport_data.name,
-                        passport_data.middle_name
-                    ])) or "не найдено"
-
                     # Generate encoded formats
                     format1 = format_passport_type1(passport_data)
                     format2 = format_passport_type2(passport_data)
 
-                    modules_str = _format_modules_used(modules_used)
+                    # Build detailed provider attribution
+                    provider_details = _format_provider_details(
+                        passport_data,
+                        hybrid_result.field_providers,
+                        modules_used,
+                    )
 
                     response_text = (
-                        f"✅ Страница {page_index + 1} обработана\n\n"
-                        f"📝 ID записи: {record.id}\n\n"
-                        f"📋 Данные:\n"
-                        f"ФИО: {full_name}\n"
-                        f"Серия и номер: {passport_data.passport_number or 'не найдено'}\n"
-                        f"Заполнено полей: {quality_score}/10\n"
-                        f"🔧 Модули: {modules_str}\n\n"
-                        f"🔐 Закодированные форматы:\n"
+                        f"Страница {page_index + 1} обработана\n\n"
+                        f"ID записи: {record.id}\n"
+                        f"Заполнено полей: {quality_score}/10\n\n"
+                        f"--- Детализация по провайдерам ---\n"
+                        f"{provider_details}\n\n"
+                        f"--- Закодированные форматы ---\n"
                         f"<code>{format1}</code>\n\n"
                         f"<code>{format2}</code>"
                     )
 
-                    await page_status.edit_text(response_text)
+                    await page_status.edit_text(response_text, parse_mode="HTML")
                     break
 
             except Exception as e:
