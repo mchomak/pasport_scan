@@ -45,10 +45,12 @@ class HybridResult:
         passport_data: PassportData,
         modules_used: List[str],
         raw_response: dict,
+        field_providers: Optional[dict] = None,
     ):
         self.passport_data = passport_data
         self.modules_used = modules_used
         self.raw_response = raw_response
+        self.field_providers = field_providers or {}
 
 
 class HybridRecognizer:
@@ -247,6 +249,16 @@ class HybridRecognizer:
                 merged[field_name] = supp_val
         return PassportData(**merged)
 
+    @staticmethod
+    def _get_filled_fields(data: PassportData) -> set:
+        """Return set of field names that have non-empty values."""
+        filled = set()
+        for field_name in data.model_fields:
+            val = getattr(data, field_name)
+            if val is not None and str(val).strip():
+                filled.add(field_name)
+        return filled
+
     # ------------------------------------------------------------------
     # Main pipeline
     # ------------------------------------------------------------------
@@ -259,11 +271,12 @@ class HybridRecognizer:
         Run the hybrid recognition pipeline.
 
         Returns HybridResult with passport_data, modules_used list,
-        and raw_response dict.
+        raw_response dict, and field_providers mapping.
         """
         modules_used: List[str] = []
         current_data = PassportData()
         raw_responses: dict = {}
+        field_providers: dict = {}
 
         # ---- Priority 1: rupasportread (Tesseract MRZ) ----
         logger.info("Hybrid: [1/3] rupasportread...")
@@ -273,13 +286,19 @@ class HybridRecognizer:
 
         if rpr_result:
             rpr_data = self._rupasportread_to_passport_data(rpr_result)
+            filled_before = self._get_filled_fields(current_data)
             current_data = self._merge(current_data, rpr_data)
+            filled_after = self._get_filled_fields(current_data)
+            new_fields = filled_after - filled_before
+            for f in new_fields:
+                field_providers[f] = "rupasportread"
             modules_used.append("rupasportread")
             raw_responses['rupasportread'] = rpr_result
             logger.info(
                 "rupasportread done",
                 filled=current_data.count_filled_fields(),
                 essential=self._count_essential(current_data),
+                new_fields=list(new_fields),
             )
         else:
             logger.info("rupasportread: no result")
@@ -292,7 +311,12 @@ class HybridRecognizer:
             )
 
             if easyocr_data:
+                filled_before = self._get_filled_fields(current_data)
                 current_data = self._merge(current_data, easyocr_data)
+                filled_after = self._get_filled_fields(current_data)
+                new_fields = filled_after - filled_before
+                for f in new_fields:
+                    field_providers[f] = "easyocr"
                 modules_used.append("easyocr")
                 raw_responses['easyocr'] = easyocr_data.model_dump(
                     mode='json'
@@ -301,6 +325,7 @@ class HybridRecognizer:
                     "EasyOCR done",
                     filled=current_data.count_filled_fields(),
                     essential=self._count_essential(current_data),
+                    new_fields=list(new_fields),
                 )
             else:
                 logger.info("EasyOCR: no result")
@@ -331,12 +356,18 @@ class HybridRecognizer:
                     ):
                         yd.middle_name = transliterate_to_latin(yd.middle_name)
 
+                    filled_before = self._get_filled_fields(current_data)
                     current_data = self._merge(current_data, yd)
+                    filled_after = self._get_filled_fields(current_data)
+                    new_fields = filled_after - filled_before
+                    for f in new_fields:
+                        field_providers[f] = "yandex_ocr"
                     modules_used.append("yandex_ocr")
                     raw_responses['yandex_ocr'] = yandex_result.raw_response
                     logger.info(
                         "Yandex OCR done",
                         filled=current_data.count_filled_fields(),
+                        new_fields=list(new_fields),
                     )
             except Exception as e:
                 logger.error("Yandex OCR failed", error=str(e))
@@ -348,4 +379,5 @@ class HybridRecognizer:
             passport_data=current_data,
             modules_used=modules_used,
             raw_response=raw_responses,
+            field_providers=field_providers,
         )
