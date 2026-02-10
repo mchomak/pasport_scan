@@ -9,6 +9,7 @@ Each subsequent engine only fills in fields that are still missing.
 """
 import asyncio
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime
@@ -107,6 +108,89 @@ class HybridRecognizer:
             if val is not None and str(val).strip():
                 count += 1
         return count
+
+    # ------------------------------------------------------------------
+    # Latin-name cleanup (common MRZ OCR artifacts)
+    # ------------------------------------------------------------------
+    NAME_FIELDS = ('surname', 'name', 'middle_name')
+
+    @staticmethod
+    def _clean_latin_name(name: Optional[str]) -> Optional[str]:
+        """Fix common OCR artifacts in Latin names from MRZ.
+
+        Typical errors:
+          3  → CH   (Ч in MRZ → ICAO "CH", Tesseract reads as "3")
+          9  → strip (soft-sign artifact, e.g. RAMIL9 → RAMIL)
+          Q  → Y    (common tail confusion, DMITRIQ → DMITRIY)
+          0  → O    (zero → letter O inside a word)
+          8  → B    (eight → B inside a word)
+          5  → S    (five → S inside a word)
+        """
+        if not name:
+            return None
+        original = name
+
+        # Upper-case for uniform processing
+        name = name.upper()
+
+        # 3 → CH  (patronymic -VICH: ANDREEVI3 → ANDREEVICH)
+        name = re.sub(r'3', 'CH', name)
+
+        # Q → Y at the end  (DMITRIQ → DMITRIY)
+        name = re.sub(r'Q$', 'Y', name)
+        # Q → Y also before consonant cluster (less common but safe)
+        name = re.sub(r'Q(?=[BCDFGHJKLMNPQRSTVWXYZ])', 'Y', name)
+
+        # Digit substitutions inside a word (surrounded by letters)
+        name = re.sub(r'(?<=[A-Z])0(?=[A-Z])', 'O', name)
+        name = re.sub(r'(?<=[A-Z])8(?=[A-Z])', 'B', name)
+        name = re.sub(r'(?<=[A-Z])5(?=[A-Z])', 'S', name)
+
+        # Strip remaining leading/trailing digits  (RAMIL9 → RAMIL)
+        name = re.sub(r'^\d+', '', name)
+        name = re.sub(r'\d+$', '', name)
+
+        # Remove any remaining non-alpha chars except hyphen
+        name = re.sub(r'[^A-Z\-]', '', name)
+
+        if not name:
+            return None
+
+        debug_log.debug("_clean_latin_name: %s -> %s", original, name)
+        return name
+
+    @staticmethod
+    def _name_quality(name: Optional[str]) -> int:
+        """Score a Latin name: higher is better.
+
+        +10  base (non-empty)
+        +len  longer names are usually more complete
+        -5   per digit remaining
+        -3   per non-alpha non-hyphen char
+        """
+        if not name or not name.strip():
+            return 0
+        score = 10 + len(name)
+        for ch in name:
+            if ch.isdigit():
+                score -= 5
+            elif not ch.isalpha() and ch != '-':
+                score -= 3
+        return max(score, 1)
+
+    @classmethod
+    def _clean_passport_data(cls, data: PassportData) -> PassportData:
+        """Apply _clean_latin_name to all name fields."""
+        updates = {}
+        for f in cls.NAME_FIELDS:
+            raw = getattr(data, f, None)
+            if raw:
+                cleaned = cls._clean_latin_name(raw)
+                if cleaned != raw:
+                    updates[f] = cleaned
+        if updates:
+            return data.model_copy(update=updates)
+        return data
 
     # ------------------------------------------------------------------
     # Priority 1: rupasportread
@@ -242,18 +326,43 @@ class HybridRecognizer:
     # ------------------------------------------------------------------
     # Merge helper
     # ------------------------------------------------------------------
-    @staticmethod
-    def _merge(base: PassportData, supplement: PassportData) -> PassportData:
-        """Merge two PassportData; `base` values take priority."""
+    @classmethod
+    def _merge(cls, base: PassportData, supplement: PassportData,
+               ) -> tuple[PassportData, set]:
+        """Merge two PassportData.
+
+        For regular fields: base wins if non-empty.
+        For name fields (surname, name, middle_name): pick the higher-quality
+        value when both are present (longer, no digit artifacts).
+
+        Returns (merged PassportData, set of field names won by supplement).
+        """
         merged = {}
+        supplement_wins: set = set()
         for field_name in base.model_fields:
             base_val = getattr(base, field_name)
             supp_val = getattr(supplement, field_name)
-            if base_val is not None and str(base_val).strip():
+
+            base_filled = base_val is not None and str(base_val).strip()
+            supp_filled = supp_val is not None and str(supp_val).strip()
+
+            if field_name in cls.NAME_FIELDS and base_filled and supp_filled:
+                # Both modules found this name → pick better one
+                bq = cls._name_quality(str(base_val))
+                sq = cls._name_quality(str(supp_val))
+                if sq > bq:
+                    debug_log.debug(
+                        "merge: prefer supplement for %s: %s (q=%d) > %s (q=%d)",
+                        field_name, supp_val, sq, base_val, bq)
+                    merged[field_name] = supp_val
+                    supplement_wins.add(field_name)
+                else:
+                    merged[field_name] = base_val
+            elif base_filled:
                 merged[field_name] = base_val
             else:
                 merged[field_name] = supp_val
-        return PassportData(**merged)
+        return PassportData(**merged), supplement_wins
 
     @staticmethod
     def _get_filled_fields(data: PassportData) -> set:
@@ -304,6 +413,7 @@ class HybridRecognizer:
 
         if rpr_result:
             rpr_data = self._rupasportread_to_passport_data(rpr_result)
+            rpr_data = self._clean_passport_data(rpr_data)
             per_module_data["rupasportread"] = rpr_data
 
             debug_log.debug("[rupasportread] raw_result=%s",
@@ -313,7 +423,7 @@ class HybridRecognizer:
                                       ensure_ascii=False))
 
             filled_before = self._get_filled_fields(current_data)
-            current_data = self._merge(current_data, rpr_data)
+            current_data, _ = self._merge(current_data, rpr_data)
             filled_after = self._get_filled_fields(current_data)
             new_fields = filled_after - filled_before
             for f in new_fields:
@@ -338,6 +448,7 @@ class HybridRecognizer:
             )
 
             if easyocr_data:
+                easyocr_data = self._clean_passport_data(easyocr_data)
                 per_module_data["easyocr"] = easyocr_data
 
                 debug_log.debug("[easyocr] parsed=%s",
@@ -345,10 +456,10 @@ class HybridRecognizer:
                                           ensure_ascii=False))
 
                 filled_before = self._get_filled_fields(current_data)
-                current_data = self._merge(current_data, easyocr_data)
+                current_data, supp_wins = self._merge(current_data, easyocr_data)
                 filled_after = self._get_filled_fields(current_data)
                 new_fields = filled_after - filled_before
-                for f in new_fields:
+                for f in new_fields | supp_wins:
                     field_providers[f] = "easyocr"
                 modules_used.append("easyocr")
                 raw_responses['easyocr'] = easyocr_data.model_dump(
@@ -392,6 +503,7 @@ class HybridRecognizer:
                     ):
                         yd.middle_name = transliterate_to_latin(yd.middle_name)
 
+                    yd = self._clean_passport_data(yd)
                     per_module_data["yandex_ocr"] = yd
 
                     debug_log.debug("[yandex_ocr] parsed=%s",
@@ -405,10 +517,10 @@ class HybridRecognizer:
                                        ensure_ascii=False, default=str))
 
                     filled_before = self._get_filled_fields(current_data)
-                    current_data = self._merge(current_data, yd)
+                    current_data, supp_wins = self._merge(current_data, yd)
                     filled_after = self._get_filled_fields(current_data)
                     new_fields = filled_after - filled_before
-                    for f in new_fields:
+                    for f in new_fields | supp_wins:
                         field_providers[f] = "yandex_ocr"
                     modules_used.append("yandex_ocr")
                     raw_responses['yandex_ocr'] = yandex_result.raw_response
