@@ -9,6 +9,7 @@ Each subsequent engine only fills in fields that are still missing.
 """
 import asyncio
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime
@@ -107,6 +108,145 @@ class HybridRecognizer:
             if val is not None and str(val).strip():
                 count += 1
         return count
+
+    # ------------------------------------------------------------------
+    # Latin-name cleanup (common MRZ OCR artifacts)
+    # ------------------------------------------------------------------
+    NAME_FIELDS = ('surname', 'name', 'middle_name')
+
+    @staticmethod
+    def _clean_latin_name(name: Optional[str]) -> Optional[str]:
+        """Fix common OCR artifacts in Latin names from MRZ.
+
+        Typical errors:
+          3  → CH   (Ч in MRZ → ICAO "CH", Tesseract reads as "3")
+          9  → strip (soft-sign artifact, e.g. RAMIL9 → RAMIL)
+          Q  → Y    (common tail confusion, DMITRIQ → DMITRIY)
+          0  → O    (zero → letter O inside a word)
+          8  → B    (eight → B inside a word)
+          5  → S    (five → S inside a word)
+        """
+        if not name:
+            return None
+        original = name
+
+        # Upper-case for uniform processing
+        name = name.upper()
+
+        # 3 → CH  (patronymic -VICH: ANDREEVI3 → ANDREEVICH)
+        name = re.sub(r'3', 'CH', name)
+
+        # Q → Y at the end  (DMITRIQ → DMITRIY)
+        name = re.sub(r'Q$', 'Y', name)
+        # Q → Y also before consonant cluster (less common but safe)
+        name = re.sub(r'Q(?=[BCDFGHJKLMNPQRSTVWXYZ])', 'Y', name)
+
+        # Digit substitutions inside a word (surrounded by letters)
+        name = re.sub(r'(?<=[A-Z])0(?=[A-Z])', 'O', name)
+        name = re.sub(r'(?<=[A-Z])8(?=[A-Z])', 'B', name)
+        name = re.sub(r'(?<=[A-Z])5(?=[A-Z])', 'S', name)
+
+        # Strip remaining leading/trailing digits  (RAMIL9 → RAMIL)
+        name = re.sub(r'^\d+', '', name)
+        name = re.sub(r'\d+$', '', name)
+
+        # Remove any remaining non-alpha chars except hyphen
+        name = re.sub(r'[^A-Z\-]', '', name)
+
+        if not name:
+            return None
+
+        debug_log.debug("_clean_latin_name: %s -> %s", original, name)
+        return name
+
+    @staticmethod
+    def _trim_patronymic(middle_name: Optional[str]) -> Optional[str]:
+        """Trim trailing garbage after -CH ending in patronymics.
+
+        Russian patronymics end with -VICH / -OVICH / -EVICH (male)
+        or -OVNA / -EVNA (female).
+        If extra chars appear after the valid ending, strip them.
+        E.g. KHOSHIMJONOVICHSS → KHOSHIMJONOVICH
+        """
+        if not middle_name:
+            return None
+        # Male patronymic: cut everything after last ...VICH / ...NICH
+        m = re.match(r'^(.+(?:VICH|NICH|MICH))(.+)?$', middle_name, re.IGNORECASE)
+        if m and m.group(2):
+            tail = m.group(2)
+            # Keep tail only if it starts with another CH (double-Ч is impossible)
+            if not tail.upper().startswith('CH'):
+                debug_log.debug("_trim_patronymic: %s -> %s (cut '%s')",
+                                middle_name, m.group(1), tail)
+                return m.group(1).upper()
+        # Female patronymic: ...OVNA / ...EVNA
+        m = re.match(r'^(.+(?:OVNA|EVNA))(.+)?$', middle_name, re.IGNORECASE)
+        if m and m.group(2):
+            debug_log.debug("_trim_patronymic: %s -> %s (cut '%s')",
+                            middle_name, m.group(1), m.group(2))
+            return m.group(1).upper()
+        return middle_name
+
+    @staticmethod
+    def _infer_gender_from_name(name: Optional[str], middle_name: Optional[str]) -> Optional[str]:
+        """Infer gender from first name / patronymic endings.
+
+        Male indicators:  name ending in consonant/IY/EY/OV,
+                          patronymic ending in -VICH / -OVICH
+        Female indicators: name ending in -A/-YA/-IA,
+                           patronymic ending in -OVNA / -EVNA
+        """
+        # Patronymic is the most reliable signal
+        if middle_name:
+            mn = middle_name.upper()
+            if re.search(r'(?:VICH|NICH|MICH)$', mn):
+                return 'M'
+            if re.search(r'(?:OVNA|EVNA|ICHNA)$', mn):
+                return 'F'
+        # Fallback to first name ending
+        if name:
+            n = name.upper()
+            if re.search(r'(?:A|YA|IA|INNA|ALLA)$', n):
+                return 'F'
+            # Most male names end in consonant or IY/EY
+            if re.search(r'(?:IY|EY|IL|AN|IM|AM|ER|IR|AR|UR|EL|AD|ED|AT|AV|EV|OV|ON|IN|OR|UR)$', n):
+                return 'M'
+        return None
+
+    @staticmethod
+    def _name_quality(name: Optional[str]) -> int:
+        """Score a Latin name: higher is better.
+
+        +10  base (non-empty)
+        +len  longer names are usually more complete
+        -5   per digit remaining
+        -3   per non-alpha non-hyphen char
+        """
+        if not name or not name.strip():
+            return 0
+        score = 10 + len(name)
+        for ch in name:
+            if ch.isdigit():
+                score -= 5
+            elif not ch.isalpha() and ch != '-':
+                score -= 3
+        return max(score, 1)
+
+    @classmethod
+    def _clean_passport_data(cls, data: PassportData) -> PassportData:
+        """Apply _clean_latin_name + _trim_patronymic to name fields."""
+        updates = {}
+        for f in cls.NAME_FIELDS:
+            raw = getattr(data, f, None)
+            if raw:
+                cleaned = cls._clean_latin_name(raw)
+                if f == 'middle_name' and cleaned:
+                    cleaned = cls._trim_patronymic(cleaned)
+                if cleaned != raw:
+                    updates[f] = cleaned
+        if updates:
+            return data.model_copy(update=updates)
+        return data
 
     # ------------------------------------------------------------------
     # Priority 1: rupasportread
@@ -242,18 +382,43 @@ class HybridRecognizer:
     # ------------------------------------------------------------------
     # Merge helper
     # ------------------------------------------------------------------
-    @staticmethod
-    def _merge(base: PassportData, supplement: PassportData) -> PassportData:
-        """Merge two PassportData; `base` values take priority."""
+    @classmethod
+    def _merge(cls, base: PassportData, supplement: PassportData,
+               ) -> tuple[PassportData, set]:
+        """Merge two PassportData.
+
+        For regular fields: base wins if non-empty.
+        For name fields (surname, name, middle_name): pick the higher-quality
+        value when both are present (longer, no digit artifacts).
+
+        Returns (merged PassportData, set of field names won by supplement).
+        """
         merged = {}
+        supplement_wins: set = set()
         for field_name in base.model_fields:
             base_val = getattr(base, field_name)
             supp_val = getattr(supplement, field_name)
-            if base_val is not None and str(base_val).strip():
+
+            base_filled = base_val is not None and str(base_val).strip()
+            supp_filled = supp_val is not None and str(supp_val).strip()
+
+            if field_name in cls.NAME_FIELDS and base_filled and supp_filled:
+                # Both modules found this name → pick better one
+                bq = cls._name_quality(str(base_val))
+                sq = cls._name_quality(str(supp_val))
+                if sq > bq:
+                    debug_log.debug(
+                        "merge: prefer supplement for %s: %s (q=%d) > %s (q=%d)",
+                        field_name, supp_val, sq, base_val, bq)
+                    merged[field_name] = supp_val
+                    supplement_wins.add(field_name)
+                else:
+                    merged[field_name] = base_val
+            elif base_filled:
                 merged[field_name] = base_val
             else:
                 merged[field_name] = supp_val
-        return PassportData(**merged)
+        return PassportData(**merged), supplement_wins
 
     @staticmethod
     def _get_filled_fields(data: PassportData) -> set:
@@ -304,6 +469,7 @@ class HybridRecognizer:
 
         if rpr_result:
             rpr_data = self._rupasportread_to_passport_data(rpr_result)
+            rpr_data = self._clean_passport_data(rpr_data)
             per_module_data["rupasportread"] = rpr_data
 
             debug_log.debug("[rupasportread] raw_result=%s",
@@ -313,7 +479,7 @@ class HybridRecognizer:
                                       ensure_ascii=False))
 
             filled_before = self._get_filled_fields(current_data)
-            current_data = self._merge(current_data, rpr_data)
+            current_data, _ = self._merge(current_data, rpr_data)
             filled_after = self._get_filled_fields(current_data)
             new_fields = filled_after - filled_before
             for f in new_fields:
@@ -338,6 +504,7 @@ class HybridRecognizer:
             )
 
             if easyocr_data:
+                easyocr_data = self._clean_passport_data(easyocr_data)
                 per_module_data["easyocr"] = easyocr_data
 
                 debug_log.debug("[easyocr] parsed=%s",
@@ -345,10 +512,10 @@ class HybridRecognizer:
                                           ensure_ascii=False))
 
                 filled_before = self._get_filled_fields(current_data)
-                current_data = self._merge(current_data, easyocr_data)
+                current_data, supp_wins = self._merge(current_data, easyocr_data)
                 filled_after = self._get_filled_fields(current_data)
                 new_fields = filled_after - filled_before
-                for f in new_fields:
+                for f in new_fields | supp_wins:
                     field_providers[f] = "easyocr"
                 modules_used.append("easyocr")
                 raw_responses['easyocr'] = easyocr_data.model_dump(
@@ -392,6 +559,7 @@ class HybridRecognizer:
                     ):
                         yd.middle_name = transliterate_to_latin(yd.middle_name)
 
+                    yd = self._clean_passport_data(yd)
                     per_module_data["yandex_ocr"] = yd
 
                     debug_log.debug("[yandex_ocr] parsed=%s",
@@ -405,10 +573,10 @@ class HybridRecognizer:
                                        ensure_ascii=False, default=str))
 
                     filled_before = self._get_filled_fields(current_data)
-                    current_data = self._merge(current_data, yd)
+                    current_data, supp_wins = self._merge(current_data, yd)
                     filled_after = self._get_filled_fields(current_data)
                     new_fields = filled_after - filled_before
-                    for f in new_fields:
+                    for f in new_fields | supp_wins:
                         field_providers[f] = "yandex_ocr"
                     modules_used.append("yandex_ocr")
                     raw_responses['yandex_ocr'] = yandex_result.raw_response
@@ -425,6 +593,29 @@ class HybridRecognizer:
                 debug_log.debug("[yandex_ocr] SKIPPED — all essential fields filled")
             elif not self.yandex_provider:
                 debug_log.debug("[yandex_ocr] SKIPPED — no provider configured")
+
+        # ---- Post-processing: Yandex priority for passport_number ----
+        if "yandex_ocr" in per_module_data:
+            yd = per_module_data["yandex_ocr"]
+            if yd.passport_number and yd.passport_number.strip():
+                old_pn = current_data.passport_number
+                if old_pn != yd.passport_number:
+                    debug_log.debug(
+                        "Yandex passport_number override: %s -> %s",
+                        old_pn, yd.passport_number)
+                    current_data = current_data.model_copy(
+                        update={"passport_number": yd.passport_number})
+                    field_providers["passport_number"] = "yandex_ocr"
+
+        # ---- Post-processing: infer gender from name/patronymic ----
+        if not current_data.gender or not current_data.gender.strip():
+            inferred = self._infer_gender_from_name(
+                current_data.name, current_data.middle_name)
+            if inferred:
+                debug_log.debug("Gender inferred from name: %s", inferred)
+                current_data = current_data.model_copy(
+                    update={"gender": inferred})
+                field_providers["gender"] = "inferred"
 
         if not modules_used:
             modules_used.append("none")
