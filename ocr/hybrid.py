@@ -160,6 +160,60 @@ class HybridRecognizer:
         return name
 
     @staticmethod
+    def _trim_patronymic(middle_name: Optional[str]) -> Optional[str]:
+        """Trim trailing garbage after -CH ending in patronymics.
+
+        Russian patronymics end with -VICH / -OVICH / -EVICH (male)
+        or -OVNA / -EVNA (female).
+        If extra chars appear after the valid ending, strip them.
+        E.g. KHOSHIMJONOVICHSS → KHOSHIMJONOVICH
+        """
+        if not middle_name:
+            return None
+        # Male patronymic: cut everything after last ...VICH / ...NICH
+        m = re.match(r'^(.+(?:VICH|NICH|MICH))(.+)?$', middle_name, re.IGNORECASE)
+        if m and m.group(2):
+            tail = m.group(2)
+            # Keep tail only if it starts with another CH (double-Ч is impossible)
+            if not tail.upper().startswith('CH'):
+                debug_log.debug("_trim_patronymic: %s -> %s (cut '%s')",
+                                middle_name, m.group(1), tail)
+                return m.group(1).upper()
+        # Female patronymic: ...OVNA / ...EVNA
+        m = re.match(r'^(.+(?:OVNA|EVNA))(.+)?$', middle_name, re.IGNORECASE)
+        if m and m.group(2):
+            debug_log.debug("_trim_patronymic: %s -> %s (cut '%s')",
+                            middle_name, m.group(1), m.group(2))
+            return m.group(1).upper()
+        return middle_name
+
+    @staticmethod
+    def _infer_gender_from_name(name: Optional[str], middle_name: Optional[str]) -> Optional[str]:
+        """Infer gender from first name / patronymic endings.
+
+        Male indicators:  name ending in consonant/IY/EY/OV,
+                          patronymic ending in -VICH / -OVICH
+        Female indicators: name ending in -A/-YA/-IA,
+                           patronymic ending in -OVNA / -EVNA
+        """
+        # Patronymic is the most reliable signal
+        if middle_name:
+            mn = middle_name.upper()
+            if re.search(r'(?:VICH|NICH|MICH)$', mn):
+                return 'M'
+            if re.search(r'(?:OVNA|EVNA|ICHNA)$', mn):
+                return 'F'
+        # Fallback to first name ending
+        if name:
+            n = name.upper()
+            if re.search(r'(?:A|YA|IA|INNA|ALLA)$', n):
+                return 'F'
+            # Most male names end in consonant or IY/EY
+            if re.search(r'(?:IY|EY|IL|AN|IM|AM|ER|IR|AR|UR|EL|AD|ED|AT|AV|EV|OV|ON|IN|OR|UR)$', n):
+                return 'M'
+        return None
+
+    @staticmethod
     def _name_quality(name: Optional[str]) -> int:
         """Score a Latin name: higher is better.
 
@@ -180,12 +234,14 @@ class HybridRecognizer:
 
     @classmethod
     def _clean_passport_data(cls, data: PassportData) -> PassportData:
-        """Apply _clean_latin_name to all name fields."""
+        """Apply _clean_latin_name + _trim_patronymic to name fields."""
         updates = {}
         for f in cls.NAME_FIELDS:
             raw = getattr(data, f, None)
             if raw:
                 cleaned = cls._clean_latin_name(raw)
+                if f == 'middle_name' and cleaned:
+                    cleaned = cls._trim_patronymic(cleaned)
                 if cleaned != raw:
                     updates[f] = cleaned
         if updates:
@@ -537,6 +593,29 @@ class HybridRecognizer:
                 debug_log.debug("[yandex_ocr] SKIPPED — all essential fields filled")
             elif not self.yandex_provider:
                 debug_log.debug("[yandex_ocr] SKIPPED — no provider configured")
+
+        # ---- Post-processing: Yandex priority for passport_number ----
+        if "yandex_ocr" in per_module_data:
+            yd = per_module_data["yandex_ocr"]
+            if yd.passport_number and yd.passport_number.strip():
+                old_pn = current_data.passport_number
+                if old_pn != yd.passport_number:
+                    debug_log.debug(
+                        "Yandex passport_number override: %s -> %s",
+                        old_pn, yd.passport_number)
+                    current_data = current_data.model_copy(
+                        update={"passport_number": yd.passport_number})
+                    field_providers["passport_number"] = "yandex_ocr"
+
+        # ---- Post-processing: infer gender from name/patronymic ----
+        if not current_data.gender or not current_data.gender.strip():
+            inferred = self._infer_gender_from_name(
+                current_data.name, current_data.middle_name)
+            if inferred:
+                debug_log.debug("Gender inferred from name: %s", inferred)
+                current_data = current_data.model_copy(
+                    update={"gender": inferred})
+                field_providers["gender"] = "inferred"
 
         if not modules_used:
             modules_used.append("none")

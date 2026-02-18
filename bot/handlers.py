@@ -14,7 +14,11 @@ from ocr.hybrid import HybridRecognizer
 from services import ImageProcessor, PdfProcessor, ExportService
 from bot.keyboards import get_export_keyboard
 from utils.logger import get_logger
-from utils.passport_formatter import format_passport_type1, format_passport_type2
+from utils.passport_formatter import (
+    format_passport_type1,
+    format_passport_type2,
+    calculate_expiry_date,
+)
 
 logger = get_logger(__name__)
 router = Router()
@@ -242,6 +246,7 @@ _PROVIDER_LABELS = {
     'rupasportread': 'Tesseract MRZ',
     'easyocr': 'EasyOCR',
     'yandex_ocr': 'Yandex OCR',
+    'inferred': 'Из имени',
     'none': '-',
 }
 
@@ -375,6 +380,18 @@ async def process_image(
             format1 = format_passport_type1(passport_data)
             format2 = format_passport_type2(passport_data)
 
+            # Check expiry date correction
+            _, expiry_corrected = calculate_expiry_date(
+                passport_data.birth_date, passport_data.issue_date)
+            expiry_warning = ""
+            if expiry_corrected:
+                expiry_warning = (
+                    "\n--- ВНИМАНИЕ ---\n"
+                    "Дата действия паспорта была в прошлом. "
+                    "Скорее всего OCR ошибся на 10 лет — "
+                    "дата скорректирована (+10 лет) в форматах ниже.\n"
+                )
+
             # Build detailed provider attribution
             provider_details = _format_provider_details(
                 passport_data,
@@ -388,7 +405,8 @@ async def process_image(
                 f"ID записи: {record.id}\n"
                 f"Заполнено полей: {quality_score}/10\n\n"
                 f"--- Детализация по провайдерам ---\n"
-                f"{provider_details}\n\n"
+                f"{provider_details}\n"
+                f"{expiry_warning}\n"
                 f"--- Закодированные форматы ---\n"
                 f"<code>{format1}</code>\n\n"
                 f"<code>{format2}</code>"
@@ -478,6 +496,18 @@ async def process_pdf(
                     format1 = format_passport_type1(passport_data)
                     format2 = format_passport_type2(passport_data)
 
+                    # Check expiry date correction
+                    _, expiry_corrected = calculate_expiry_date(
+                        passport_data.birth_date, passport_data.issue_date)
+                    expiry_warning = ""
+                    if expiry_corrected:
+                        expiry_warning = (
+                            "\n--- ВНИМАНИЕ ---\n"
+                            "Дата действия паспорта была в прошлом. "
+                            "Скорее всего OCR ошибся на 10 лет — "
+                            "дата скорректирована (+10 лет) в форматах ниже.\n"
+                        )
+
                     # Build detailed provider attribution
                     provider_details = _format_provider_details(
                         passport_data,
@@ -491,7 +521,8 @@ async def process_pdf(
                         f"ID записи: {record.id}\n"
                         f"Заполнено полей: {quality_score}/10\n\n"
                         f"--- Детализация по провайдерам ---\n"
-                        f"{provider_details}\n\n"
+                        f"{provider_details}\n"
+                        f"{expiry_warning}\n"
                         f"--- Закодированные форматы ---\n"
                         f"<code>{format1}</code>\n\n"
                         f"<code>{format2}</code>"

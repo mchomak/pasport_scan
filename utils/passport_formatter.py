@@ -1,5 +1,5 @@
 """Passport data formatting utilities."""
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 from ocr.models import PassportData
 
@@ -41,34 +41,104 @@ def transliterate_to_latin(text: Optional[str]) -> str:
     return ''.join(result)
 
 
-def get_country_code(birth_place: Optional[str]) -> str:
+def get_country_code(
+    birth_place: Optional[str] = None,
+    passport_number: Optional[str] = None,
+    surname: Optional[str] = None,
+    name: Optional[str] = None,
+) -> str:
     """
-    Определяет код страны по месту рождения.
+    Определяет код страны по месту рождения, серии паспорта и ФИО.
+
+    Приоритет:
+      1) Место рождения (самый надёжный)
+      2) Серия паспорта (1-й/2-й символ — код региона РФ)
+      3) По умолчанию «ru»
 
     Args:
         birth_place: Место рождения
+        passport_number: Серия и номер паспорта
+        surname: Фамилия (лат.)
+        name: Имя (лат.)
 
     Returns:
-        Код страны (uz, td, kg, ru)
+        Код страны ISO‑2 (ru, uz, tj, kg, kz, az, am, md, by, ua, ge, tm)
     """
-    if not birth_place:
-        return "ru"
+    # ---- 1. По месту рождения ----
+    if birth_place:
+        bp = birth_place.lower()
+        # Узбекистан
+        if any(w in bp for w in [
+            "узбек", "uzbek", "ташкент", "tashkent", "самарканд",
+            "бухара", "фергана", "наманган", "андижан", "хорезм",
+            "навои", "каракалпак", "сурхандар", "кашкадар",
+        ]):
+            return "uz"
+        # Таджикистан
+        if any(w in bp for w in [
+            "таджик", "tajik", "душанбе", "dushanbe", "худжанд",
+            "хатлон", "бохтар", "курган-тюбе", "куляб",
+        ]):
+            return "tj"
+        # Киргизия
+        if any(w in bp for w in [
+            "кирги", "кыргы", "kyrgyz", "бишкек", "bishkek",
+            "ош", "джалал", "нарын", "каракол", "иссык",
+        ]):
+            return "kg"
+        # Казахстан
+        if any(w in bp for w in [
+            "казах", "kazakh", "алматы", "almaty", "астана",
+            "нур-султан", "караганд", "шымкент", "актобе", "атырау",
+        ]):
+            return "kz"
+        # Азербайджан
+        if any(w in bp for w in [
+            "азербайджан", "azerba", "баку", "baku", "гянджа", "сумгаит",
+        ]):
+            return "az"
+        # Армения
+        if any(w in bp for w in [
+            "армени", "armen", "ереван", "yerevan", "гюмри",
+        ]):
+            return "am"
+        # Молдова
+        if any(w in bp for w in [
+            "молдов", "молдав", "moldov", "кишин", "chisinau",
+        ]):
+            return "md"
+        # Беларусь
+        if any(w in bp for w in [
+            "беларус", "белорус", "belarus", "минск", "minsk",
+            "гомель", "брест", "гродно", "витебск", "могилев",
+        ]):
+            return "by"
+        # Украина
+        if any(w in bp for w in [
+            "украин", "ukrain", "киев", "kyiv", "kiev", "одесс",
+            "харьков", "днепр", "львов", "запорож", "донецк",
+        ]):
+            return "ua"
+        # Грузия
+        if any(w in bp for w in [
+            "грузи", "georgi", "тбилис", "tbilisi", "батуми",
+        ]):
+            return "ge"
+        # Туркменистан
+        if any(w in bp for w in [
+            "туркмен", "turkmen", "ашхабад", "ashgabat",
+        ]):
+            return "tm"
 
-    birth_place_lower = birth_place.lower()
+    # ---- 2. По серии паспорта (российский внутренний) ----
+    # Серия XX YY, первые 2 цифры — код региона ОКАТО.
+    # Если серия есть и это 10-значный номер — скорее всего РФ.
+    if passport_number:
+        digits = passport_number.replace(" ", "")
+        if len(digits) == 10 and digits.isdigit():
+            return "ru"
 
-    # Узбекистан
-    if any(word in birth_place_lower for word in ["узбек", "uzbek", "ташкент", "самарканд", "бухара"]):
-        return "uz"
-
-    # Таджикистан
-    if any(word in birth_place_lower for word in ["таджик", "tajik", "душанбе", "худжанд"]):
-        return "td"
-
-    # Киргизия
-    if any(word in birth_place_lower for word in ["кирги", "кыргы", "kyrgyz", "бишкек", "ош"]):
-        return "kg"
-
-    # По умолчанию Россия
+    # По умолчанию
     return "ru"
 
 
@@ -158,7 +228,10 @@ def format_date_long(d: Optional[date]) -> str:
     return f"{day}{month}{year}"
 
 
-def calculate_expiry_date(birth_date: Optional[date], issue_date: Optional[date]) -> Optional[date]:
+def calculate_expiry_date(
+    birth_date: Optional[date],
+    issue_date: Optional[date],
+) -> tuple[Optional[date], bool]:
     """
     Рассчитывает срок действия российского паспорта.
 
@@ -167,31 +240,38 @@ def calculate_expiry_date(birth_date: Optional[date], issue_date: Optional[date]
     - До 45 лет (выдается в 20)
     - Бессрочно после 45 лет
 
+    Если рассчитанная дата уже в прошлом — прибавляем 10 лет
+    (типичная ошибка OCR: 2016 вместо 2026).
+
     Args:
         birth_date: Дата рождения
         issue_date: Дата выдачи
 
     Returns:
-        Дата окончания срока действия или None
+        (expiry_date, was_corrected) — дата и флаг коррекции +10 лет
     """
     if not birth_date or not issue_date:
-        return None
+        return None, False
 
     age_at_issue = issue_date.year - birth_date.year
 
     # Первый паспорт (14-20 лет) - действует до 20 лет
     if age_at_issue < 20:
         expiry = date(birth_date.year + 20, birth_date.month, birth_date.day)
-        return expiry
-
     # Второй паспорт (20-45 лет) - действует до 45 лет
-    if age_at_issue < 45:
+    elif age_at_issue < 45:
         expiry = date(birth_date.year + 45, birth_date.month, birth_date.day)
-        return expiry
+    else:
+        # Третий паспорт (после 45) - бессрочный, ставим +20 лет для формата
+        expiry = date(issue_date.year + 20, issue_date.month, issue_date.day)
 
-    # Третий паспорт (после 45) - бессрочный, ставим +20 лет для формата
-    expiry = date(issue_date.year + 20, issue_date.month, issue_date.day)
-    return expiry
+    # Коррекция: если дата уже в прошлом → OCR ошибся на 10 лет
+    today = date.today()
+    if expiry < today:
+        expiry = date(expiry.year + 10, expiry.month, expiry.day)
+        return expiry, True
+
+    return expiry, False
 
 
 def format_passport_type1(data: PassportData) -> str:
@@ -205,11 +285,12 @@ def format_passport_type1(data: PassportData) -> str:
     Returns:
         Отформатированная строка
     """
-    country = get_country_code(data.birth_place)
+    country = get_country_code(
+        data.birth_place, data.passport_number, data.surname, data.name)
     number = (data.passport_number or "0000000000").replace(" ", "").lower()
     birth_date = format_date_long(data.birth_date)
     gender = get_gender_code(data.gender)
-    expiry_date = calculate_expiry_date(data.birth_date, data.issue_date)
+    expiry_date, _ = calculate_expiry_date(data.birth_date, data.issue_date)
     expiry = format_date_long(expiry_date)
     surname = transliterate_to_latin(data.surname).lower()
     name = transliterate_to_latin(data.name).lower()
@@ -232,10 +313,11 @@ def format_passport_type2(data: PassportData) -> str:
     name = transliterate_to_latin(data.name).lower()
     birth_date = format_date_short(data.birth_date)
     gender = get_gender_code(data.gender)
-    country = get_country_code(data.birth_place)
+    country = get_country_code(
+        data.birth_place, data.passport_number, data.surname, data.name)
     doc_type = get_document_type(data.passport_number)
     number = (data.passport_number or "0000000000").replace(" ", "").lower()
-    expiry_date = calculate_expiry_date(data.birth_date, data.issue_date)
+    expiry_date, _ = calculate_expiry_date(data.birth_date, data.issue_date)
     expiry = format_date_short(expiry_date)
 
     return f"-{surname} {name} {birth_date}+{gender}/{country}/{doc_type} {number}/{expiry}"
