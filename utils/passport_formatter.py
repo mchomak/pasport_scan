@@ -70,36 +70,43 @@ def get_country_code(
         # Узбекистан
         if any(w in bp for w in [
             "узбек", "uzbek", "ташкент", "tashkent", "самарканд",
-            "бухара", "фергана", "наманган", "андижан", "хорезм",
-            "навои", "каракалпак", "сурхандар", "кашкадар",
+            "samarkand", "бухара", "bukhara", "фергана", "fergana",
+            "наманган", "namangan", "андижан", "andijan", "хорезм",
+            "khorezm", "навои", "navoi", "каракалпак", "karakalpak",
+            "сурхандар", "surkhan", "кашкадар", "kashkadar",
+            "jizzakh", "джизак", "syrdarya", "сырдар",
         ]):
             return "uz"
         # Таджикистан
         if any(w in bp for w in [
             "таджик", "tajik", "душанбе", "dushanbe", "худжанд",
-            "хатлон", "бохтар", "курган-тюбе", "куляб",
+            "khujand", "хатлон", "khatlon", "бохтар", "bokhtar",
+            "курган-тюбе", "kurgan", "куляб", "kulyab", "kulob",
         ]):
             return "tj"
         # Киргизия
         if any(w in bp for w in [
             "кирги", "кыргы", "kyrgyz", "бишкек", "bishkek",
-            "ош", "джалал", "нарын", "каракол", "иссык",
+            "ош", "osh ", "джалал", "jalal", "нарын", "naryn",
+            "каракол", "karakol", "иссык", "issyk",
         ]):
             return "kg"
         # Казахстан
         if any(w in bp for w in [
-            "казах", "kazakh", "алматы", "almaty", "астана",
-            "нур-султан", "караганд", "шымкент", "актобе", "атырау",
+            "казах", "kazakh", "алматы", "almaty", "астана", "astana",
+            "нур-султан", "nur-sultan", "караганд", "karagand",
+            "шымкент", "shymkent", "актобе", "aktobe", "атырау", "atyrau",
         ]):
             return "kz"
         # Азербайджан
         if any(w in bp for w in [
-            "азербайджан", "azerba", "баку", "baku", "гянджа", "сумгаит",
+            "азербайджан", "azerba", "баку", "baku", "гянджа",
+            "ganja", "сумгаит", "sumgait",
         ]):
             return "az"
         # Армения
         if any(w in bp for w in [
-            "армени", "armen", "ереван", "yerevan", "гюмри",
+            "армени", "armen", "ереван", "yerevan", "гюмри", "gyumri",
         ]):
             return "am"
         # Молдова
@@ -110,18 +117,20 @@ def get_country_code(
         # Беларусь
         if any(w in bp for w in [
             "беларус", "белорус", "belarus", "минск", "minsk",
-            "гомель", "брест", "гродно", "витебск", "могилев",
+            "гомель", "gomel", "брест", "brest", "гродно", "grodno",
+            "витебск", "vitebsk", "могилев", "mogilev",
         ]):
             return "by"
         # Украина
         if any(w in bp for w in [
             "украин", "ukrain", "киев", "kyiv", "kiev", "одесс",
-            "харьков", "днепр", "львов", "запорож", "донецк",
+            "odess", "харьков", "kharkiv", "днепр", "dnipr",
+            "львов", "lviv", "запорож", "zapori", "донецк", "donetsk",
         ]):
             return "ua"
         # Грузия
         if any(w in bp for w in [
-            "грузи", "georgi", "тбилис", "tbilisi", "батуми",
+            "грузи", "georgi", "тбилис", "tbilisi", "батуми", "batumi",
         ]):
             return "ge"
         # Туркменистан
@@ -185,6 +194,41 @@ def get_gender_code(gender: Optional[str]) -> str:
         return "f"
 
     return "m"
+
+
+def infer_gender(middle_name: Optional[str]) -> Optional[str]:
+    """
+    Определяет пол по отчеству/патрониму.
+
+    Args:
+        middle_name: Отчество
+
+    Returns:
+        "male" / "female" / None
+    """
+    if not middle_name:
+        return None
+
+    mn = middle_name.lower()
+
+    # Мужские окончания
+    if any(mn.endswith(s) for s in [
+        "ович", "евич", "ич",              # рус. кириллица
+        "ovich", "evich",                   # рус. латиница
+        "ugli", "ogli", "o'g'li",          # узб.
+        "зода", "zoda",                     # тадж.
+    ]):
+        return "male"
+
+    # Женские окончания
+    if any(mn.endswith(s) for s in [
+        "овна", "евна", "ична",            # рус. кириллица
+        "ovna", "evna",                     # рус. латиница
+        "qizi", "kizi",                     # узб.
+    ]):
+        return "female"
+
+    return None
 
 
 def format_date_short(d: Optional[date]) -> str:
