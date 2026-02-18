@@ -381,15 +381,15 @@ async def process_image(
             format2 = format_passport_type2(passport_data)
 
             # Check expiry date correction
-            _, expiry_corrected = calculate_expiry_date(
-                passport_data.birth_date, passport_data.issue_date)
+            _, expiry_corrected, years_added = calculate_expiry_date(
+                passport_data.birth_date, passport_data.issue_date,
+                passport_data.passport_number)
             expiry_warning = ""
             if expiry_corrected:
                 expiry_warning = (
                     "\n--- ВНИМАНИЕ ---\n"
                     "Дата действия паспорта была в прошлом. "
-                    "Скорее всего OCR ошибся на 10 лет — "
-                    "дата скорректирована (+10 лет) в форматах ниже.\n"
+                    f"Дата скорректирована (+{years_added} лет) в форматах ниже.\n"
                 )
 
             # Build detailed provider attribution
@@ -497,15 +497,15 @@ async def process_pdf(
                     format2 = format_passport_type2(passport_data)
 
                     # Check expiry date correction
-                    _, expiry_corrected = calculate_expiry_date(
-                        passport_data.birth_date, passport_data.issue_date)
+                    _, expiry_corrected, years_added = calculate_expiry_date(
+                        passport_data.birth_date, passport_data.issue_date,
+                        passport_data.passport_number)
                     expiry_warning = ""
                     if expiry_corrected:
                         expiry_warning = (
                             "\n--- ВНИМАНИЕ ---\n"
                             "Дата действия паспорта была в прошлом. "
-                            "Скорее всего OCR ошибся на 10 лет — "
-                            "дата скорректирована (+10 лет) в форматах ниже.\n"
+                            f"Дата скорректирована (+{years_added} лет) в форматах ниже.\n"
                         )
 
                     # Build detailed provider attribution

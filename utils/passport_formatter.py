@@ -228,50 +228,68 @@ def format_date_long(d: Optional[date]) -> str:
     return f"{day}{month}{year}"
 
 
+def _safe_date_add_years(d: date, years: int) -> date:
+    """Безопасно прибавляет годы к дате (обработка 29 февраля)."""
+    try:
+        return date(d.year + years, d.month, d.day)
+    except ValueError:
+        # 29 февраля в невисокосный год → 28 февраля
+        return date(d.year + years, d.month, d.day - 1)
+
+
 def calculate_expiry_date(
     birth_date: Optional[date],
     issue_date: Optional[date],
-) -> tuple[Optional[date], bool]:
+    passport_number: Optional[str] = None,
+) -> tuple[Optional[date], bool, int]:
     """
-    Рассчитывает срок действия российского паспорта.
+    Рассчитывает срок действия паспорта.
 
-    Паспорт РФ действует:
-    - До 20 лет (выдается в 14)
-    - До 45 лет (выдается в 20)
-    - Бессрочно после 45 лет
+    Для российского внутреннего паспорта (PS):
+    - До 20 лет → действует до 20 лет
+    - До 45 лет → действует до 45 лет
+    - После 45 → бессрочно (ставим +20 лет для формата)
 
-    Если рассчитанная дата уже в прошлом — прибавляем 10 лет
-    (типичная ошибка OCR: 2016 вместо 2026).
+    Для остальных паспортов (NP, PSP):
+    - Дата выдачи + 10 лет
+
+    Если рассчитанная дата уже в прошлом — прибавляем по 10 лет,
+    пока дата не окажется в будущем.
 
     Args:
         birth_date: Дата рождения
         issue_date: Дата выдачи
+        passport_number: Серия и номер паспорта (для определения типа)
 
     Returns:
-        (expiry_date, was_corrected) — дата и флаг коррекции +10 лет
+        (expiry_date, was_corrected, years_added) — дата, флаг коррекции, кол-во лет
     """
     if not birth_date or not issue_date:
-        return None, False
+        return None, False, 0
 
-    age_at_issue = issue_date.year - birth_date.year
+    doc_type = get_document_type(passport_number)
 
-    # Первый паспорт (14-20 лет) - действует до 20 лет
-    if age_at_issue < 20:
-        expiry = date(birth_date.year + 20, birth_date.month, birth_date.day)
-    # Второй паспорт (20-45 лет) - действует до 45 лет
-    elif age_at_issue < 45:
-        expiry = date(birth_date.year + 45, birth_date.month, birth_date.day)
+    if doc_type == "PS":
+        # Российский внутренний паспорт — по возрасту
+        age_at_issue = issue_date.year - birth_date.year
+        if age_at_issue < 20:
+            expiry = _safe_date_add_years(birth_date, 20)
+        elif age_at_issue < 45:
+            expiry = _safe_date_add_years(birth_date, 45)
+        else:
+            expiry = _safe_date_add_years(issue_date, 20)
     else:
-        # Третий паспорт (после 45) - бессрочный, ставим +20 лет для формата
-        expiry = date(issue_date.year + 20, issue_date.month, issue_date.day)
+        # Иностранные / национальные паспорта — дата выдачи + 10 лет
+        expiry = _safe_date_add_years(issue_date, 10)
 
-    # Коррекция: если дата уже в прошлом → OCR ошибся на 10 лет
+    # Коррекция: если дата уже в прошлом → прибавляем по 10 лет до будущего
     today = date.today()
-    if expiry < today:
-        expiry = date(expiry.year + 10, expiry.month, expiry.day)
-        return expiry, True
+    years_added = 0
+    while expiry < today:
+        expiry = _safe_date_add_years(expiry, 10)
+        years_added += 10
 
-    return expiry, False
+    return expiry, years_added > 0, years_added
 
 
 def format_passport_type1(data: PassportData) -> str:
@@ -290,7 +308,8 @@ def format_passport_type1(data: PassportData) -> str:
     number = (data.passport_number or "0000000000").replace(" ", "").lower()
     birth_date = format_date_long(data.birth_date)
     gender = get_gender_code(data.gender)
-    expiry_date, _ = calculate_expiry_date(data.birth_date, data.issue_date)
+    expiry_date, _, _ = calculate_expiry_date(
+        data.birth_date, data.issue_date, data.passport_number)
     expiry = format_date_long(expiry_date)
     surname = transliterate_to_latin(data.surname).lower()
     name = transliterate_to_latin(data.name).lower()
@@ -317,7 +336,8 @@ def format_passport_type2(data: PassportData) -> str:
         data.birth_place, data.passport_number, data.surname, data.name)
     doc_type = get_document_type(data.passport_number)
     number = (data.passport_number or "0000000000").replace(" ", "").lower()
-    expiry_date, _ = calculate_expiry_date(data.birth_date, data.issue_date)
+    expiry_date, _, _ = calculate_expiry_date(
+        data.birth_date, data.issue_date, data.passport_number)
     expiry = format_date_short(expiry_date)
 
     return f"-{surname} {name} {birth_date}+{gender}/{country}/{doc_type} {number}/{expiry}"
