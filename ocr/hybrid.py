@@ -199,9 +199,9 @@ class HybridRecognizer:
         # Patronymic is the most reliable signal
         if middle_name:
             mn = middle_name.upper()
-            if re.search(r'(?:VICH|NICH|MICH)$', mn):
+            if re.search(r'(?:VICH|NICH|MICH|UGLI|OGLI|ZODA)$', mn):
                 return 'M'
-            if re.search(r'(?:OVNA|EVNA|ICHNA)$', mn):
+            if re.search(r'(?:OVNA|EVNA|ICHNA|QIZI|KIZI)$', mn):
                 return 'F'
         # Fallback to first name ending
         if name:
