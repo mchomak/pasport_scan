@@ -196,37 +196,46 @@ def get_gender_code(gender: Optional[str]) -> str:
     return "m"
 
 
-def infer_gender(middle_name: Optional[str]) -> Optional[str]:
+def infer_gender(
+    middle_name: Optional[str] = None,
+    surname: Optional[str] = None,
+) -> Optional[str]:
     """
-    Определяет пол по отчеству/патрониму.
+    Определяет пол по отчеству/патрониму и фамилии.
+
+    Приоритет: отчество > фамилия.
 
     Args:
         middle_name: Отчество
+        surname: Фамилия
 
     Returns:
         "male" / "female" / None
     """
-    if not middle_name:
-        return None
+    # 1. По отчеству (наиболее надёжно)
+    if middle_name:
+        mn = middle_name.lower()
+        if any(mn.endswith(s) for s in [
+            "ович", "евич", "ич",              # рус. кириллица
+            "ovich", "evich",                   # рус. латиница
+            "ugli", "ogli", "o'g'li",          # узб.
+            "зода", "zoda",                     # тадж.
+        ]):
+            return "male"
+        if any(mn.endswith(s) for s in [
+            "овна", "евна", "ична",            # рус. кириллица
+            "ovna", "evna",                     # рус. латиница
+            "qizi", "kizi",                     # узб.
+        ]):
+            return "female"
 
-    mn = middle_name.lower()
-
-    # Мужские окончания
-    if any(mn.endswith(s) for s in [
-        "ович", "евич", "ич",              # рус. кириллица
-        "ovich", "evich",                   # рус. латиница
-        "ugli", "ogli", "o'g'li",          # узб.
-        "зода", "zoda",                     # тадж.
-    ]):
-        return "male"
-
-    # Женские окончания
-    if any(mn.endswith(s) for s in [
-        "овна", "евна", "ична",            # рус. кириллица
-        "ovna", "evna",                     # рус. латиница
-        "qizi", "kizi",                     # узб.
-    ]):
-        return "female"
+    # 2. По фамилии (славянские/тюркские окончания)
+    if surname:
+        sn = surname.lower()
+        if any(sn.endswith(s) for s in ["ova", "eva", "ina", "ова", "ева", "ина"]):
+            return "female"
+        if any(sn.endswith(s) for s in ["ov", "ev", "in", "ов", "ев", "ин"]):
+            return "male"
 
     return None
 
@@ -308,13 +317,16 @@ def calculate_expiry_date(
     Returns:
         (expiry_date, was_corrected, years_added) — дата, флаг коррекции, кол-во лет
     """
-    if not birth_date or not issue_date:
+    if not issue_date:
         return None, False, 0
 
     doc_type = get_document_type(passport_number)
 
     if doc_type == "PS":
         # Российский внутренний паспорт — по возрасту
+        if not birth_date:
+            # Без даты рождения невозможно рассчитать для РФ паспорта
+            return None, False, 0
         age_at_issue = issue_date.year - birth_date.year
         if age_at_issue < 20:
             expiry = _safe_date_add_years(birth_date, 20)
@@ -324,6 +336,7 @@ def calculate_expiry_date(
             expiry = _safe_date_add_years(issue_date, 20)
     else:
         # Иностранные / национальные паспорта — дата выдачи + 10 лет
+        # birth_date не требуется
         expiry = _safe_date_add_years(issue_date, 10)
 
     # Коррекция: если дата уже в прошлом → прибавляем по 10 лет до будущего

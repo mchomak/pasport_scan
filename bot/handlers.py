@@ -350,9 +350,9 @@ async def process_image(
         passport_data = hybrid_result.passport_data
         modules_used = hybrid_result.modules_used
 
-        # Infer gender from patronymic if not detected
-        if not passport_data.gender and passport_data.middle_name:
-            inferred = infer_gender(passport_data.middle_name)
+        # Infer gender from patronymic/surname if not detected
+        if not passport_data.gender:
+            inferred = infer_gender(passport_data.middle_name, passport_data.surname)
             if inferred:
                 passport_data.gender = inferred
                 hybrid_result.field_providers['gender'] = 'inferred'

@@ -188,27 +188,34 @@ class HybridRecognizer:
         return middle_name
 
     @staticmethod
-    def _infer_gender_from_name(name: Optional[str], middle_name: Optional[str]) -> Optional[str]:
-        """Infer gender from first name / patronymic endings.
+    def _infer_gender_from_name(
+        name: Optional[str],
+        middle_name: Optional[str],
+        surname: Optional[str] = None,
+    ) -> Optional[str]:
+        """Infer gender from patronymic, surname, or first name endings.
 
-        Male indicators:  name ending in consonant/IY/EY/OV,
-                          patronymic ending in -VICH / -OVICH
-        Female indicators: name ending in -A/-YA/-IA,
-                           patronymic ending in -OVNA / -EVNA
+        Priority: patronymic > surname > first name.
         """
-        # Patronymic is the most reliable signal
+        # 1. Patronymic — most reliable signal
         if middle_name:
             mn = middle_name.upper()
             if re.search(r'(?:VICH|NICH|MICH|UGLI|OGLI|ZODA)$', mn):
                 return 'M'
             if re.search(r'(?:OVNA|EVNA|ICHNA|QIZI|KIZI)$', mn):
                 return 'F'
-        # Fallback to first name ending
+        # 2. Surname ending — reliable for Slavic/Turkic names
+        if surname:
+            sn = surname.upper()
+            if re.search(r'(?:OVA|EVA|INA|SKAYA|CKAYA)$', sn):
+                return 'F'
+            if re.search(r'(?:OV|EV|IN|SKIY|CKIY|SKOY|CKOY)$', sn):
+                return 'M'
+        # 3. First name ending — least reliable fallback
         if name:
             n = name.upper()
             if re.search(r'(?:A|YA|IA|INNA|ALLA)$', n):
                 return 'F'
-            # Most male names end in consonant or IY/EY
             if re.search(r'(?:IY|EY|IL|AN|IM|AM|ER|IR|AR|UR|EL|AD|ED|AT|AV|EV|OV|ON|IN|OR|UR)$', n):
                 return 'M'
         return None
@@ -610,7 +617,8 @@ class HybridRecognizer:
         # ---- Post-processing: infer gender from name/patronymic ----
         if not current_data.gender or not current_data.gender.strip():
             inferred = self._infer_gender_from_name(
-                current_data.name, current_data.middle_name)
+                current_data.name, current_data.middle_name,
+                current_data.surname)
             if inferred:
                 debug_log.debug("Gender inferred from name: %s", inferred)
                 current_data = current_data.model_copy(
