@@ -6,12 +6,18 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from config import settings
 from db.database import get_db
 from db.repository import PassportRepository
 from ocr.provider import get_ocr_provider
 from ocr.hybrid import HybridRecognizer
-from services import ImageProcessor, PdfProcessor, ExportService
+from services.image_processor import ImageProcessor
+from services.pdf_processor import PdfProcessor
+from services.export_service import ExportService
 from bot.keyboards import get_export_keyboard
 from utils.logger import get_logger
 from utils.passport_formatter import (
@@ -138,7 +144,7 @@ async def handle_photo(message: Message, bot: Bot):
         await message.answer("Файл слишком большой. Максимальный размер: 20 МБ")
         return
 
-    status_msg = await message.answer("Обрабатываю фото (гибридное распознавание)...")
+    status_msg = await message.reply("Обрабатываю фото (гибридное распознавание)...")
 
     try:
         # Download photo
@@ -203,7 +209,7 @@ async def handle_document(message: Message, bot: Bot):
         )
         return
 
-    status_msg = await message.answer("Обрабатываю документ (гибридное распознавание)...")
+    status_msg = await message.reply("Обрабатываю документ (гибридное распознавание)...")
 
     try:
         # Download document
@@ -350,9 +356,9 @@ async def process_image(
         passport_data = hybrid_result.passport_data
         modules_used = hybrid_result.modules_used
 
-        # Infer gender from patronymic if not detected
-        if not passport_data.gender and passport_data.middle_name:
-            inferred = infer_gender(passport_data.middle_name)
+        # Infer gender from patronymic/surname if not detected
+        if not passport_data.gender:
+            inferred = infer_gender(passport_data.middle_name, passport_data.surname)
             if inferred:
                 passport_data.gender = inferred
                 hybrid_result.field_providers['gender'] = 'inferred'
@@ -454,7 +460,7 @@ async def process_pdf(
 
         # Process each page
         for image_bytes, page_index in pages:
-            page_status = await message.answer(
+            page_status = await message.reply(
                 f"Обрабатываю страницу {page_index + 1} (гибридное распознавание)..."
             )
 
@@ -473,9 +479,9 @@ async def process_pdf(
                 passport_data = hybrid_result.passport_data
                 modules_used = hybrid_result.modules_used
 
-                # Infer gender from patronymic if not detected
-                if not passport_data.gender and passport_data.middle_name:
-                    inferred = infer_gender(passport_data.middle_name)
+                # Infer gender from patronymic/surname if not detected
+                if not passport_data.gender:
+                    inferred = infer_gender(passport_data.middle_name, passport_data.surname)
                     if inferred:
                         passport_data.gender = inferred
                         hybrid_result.field_providers['gender'] = 'inferred'
