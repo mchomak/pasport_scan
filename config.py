@@ -56,6 +56,22 @@ class Settings(BaseSettings):
         description="OpenRouter vision model to use"
     )
 
+    # Output format templates
+    format_type1: str = Field(
+        default="{country}/{number}/{country}/{birth_date_long}/{gender}/{expiry_long}/{surname}/{name}",
+        description="Output format template 1"
+    )
+    format_type2: str = Field(
+        default="-{surname} {name} {birth_date_short}+{gender}/{country}/{doc_type} {number}/{expiry_short}",
+        description="Output format template 2"
+    )
+
+    # OCR module priority (comma-separated, lower index = higher priority)
+    ocr_module_priority: str = Field(
+        default="openrouter,yandex_ocr,rupasportread",
+        description="OCR module priority, comma-separated list"
+    )
+
     # OCR Limits
     ocr_max_file_mb: int = Field(
         default=10,
@@ -108,6 +124,10 @@ class Settings(BaseSettings):
     def get_admin_ids(self) -> list[int]:
         """Get admin IDs as list of integers."""
         return [int(x.strip()) for x in self.admin_ids.split(",")]
+
+    def get_module_priority(self) -> list[str]:
+        """Get OCR module priority as list."""
+        return [m.strip() for m in self.ocr_module_priority.split(",") if m.strip()]
 
     @property
     def ocr_max_file_bytes(self) -> int:

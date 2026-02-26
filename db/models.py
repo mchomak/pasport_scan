@@ -44,9 +44,7 @@ class PassportRecord(Base):
 
     # Passport data
     passport_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    issued_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    issue_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    subdivision_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     # Personal data
     surname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

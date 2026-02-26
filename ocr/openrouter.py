@@ -13,30 +13,28 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Prompt to extract passport data from image
 _SYSTEM_PROMPT = """You are a passport data extraction assistant.
 Extract all visible data from the passport image and return it as JSON.
 Return ONLY a valid JSON object, no markdown, no explanation."""
 
-_USER_PROMPT = """Extract all passport data from this image.
+_USER_PROMPT = """Extract passport data from this image.
 
 Return a JSON object with these exact fields:
 {
   "surname": "family name in Latin uppercase, e.g. IVANOV",
   "name": "first name in Latin uppercase, e.g. IVAN",
   "middle_name": "patronymic/middle name in Latin uppercase, or null",
-  "passport_number": "series+number without spaces, e.g. fa3009783 or 4619709685, or null",
+  "passport_number": "series+number without spaces, e.g. fa3009783 or 4619709685",
   "birth_date": "date of birth in YYYY-MM-DD format, or null",
-  "issue_date": "date of issue in YYYY-MM-DD format, or null",
+  "expiry_date": "passport expiry/validity date in YYYY-MM-DD format, or null",
   "gender": "male or female, or null",
-  "birth_place": "place of birth in English lowercase, or null",
-  "issued_by": "issuing authority text, or null",
-  "subdivision_code": "subdivision/department code, or null"
+  "birth_place": "place of birth in English lowercase, or null"
 }
 
 Rules:
 - All name fields (surname, name, middle_name) must be transliterated to Latin uppercase
 - Dates must be in YYYY-MM-DD format
+- expiry_date is the date until which the passport is valid (Date of expiry / Дата окончания срока действия / Amal qilish muddati)
 - gender must be "male" or "female" (not M/F)
 - If a field is not visible or unclear, use null
 - Return ONLY the JSON object"""
@@ -67,7 +65,6 @@ class OpenRouterProvider:
 
     def _parse_response(self, content: str) -> PassportData:
         """Parse LLM JSON response into PassportData."""
-        # Strip markdown code blocks if present
         content = content.strip()
         content = re.sub(r'^```(?:json)?\s*', '', content)
         content = re.sub(r'\s*```$', '', content)
@@ -76,7 +73,6 @@ class OpenRouterProvider:
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
-            # Try to extract JSON object from response
             m = re.search(r'\{.*\}', content, re.DOTALL)
             if m:
                 data = json.loads(m.group(0))
@@ -96,11 +92,9 @@ class OpenRouterProvider:
             middle_name=get_str("middle_name"),
             passport_number=get_str("passport_number"),
             birth_date=self._parse_date(get_str("birth_date")),
-            issue_date=self._parse_date(get_str("issue_date")),
+            expiry_date=self._parse_date(get_str("expiry_date")),
             gender=get_str("gender"),
             birth_place=get_str("birth_place"),
-            issued_by=get_str("issued_by"),
-            subdivision_code=get_str("subdivision_code"),
         )
 
     async def recognize_passport(
