@@ -1,44 +1,27 @@
 """
-Hybrid OCR module combining three recognition engines with priority chain:
+Hybrid OCR module with configurable module priority.
 
-  1. rupasportread  (Tesseract MRZ) - fast, free, Latin names directly
-  2. EasyOCR        (enhanced)      - deeper analysis, MRZ + Russian text
-  3. Yandex OCR     (cloud API)     - most accurate, paid
-
-Each subsequent engine only fills in fields that are still missing.
+Module priority is read from settings.ocr_module_priority.
+Available modules: openrouter, yandex_ocr, rupasportread.
+Higher-priority modules run first; subsequent modules only fill missing fields.
 """
 import asyncio
-import os
 import re
-import shutil
-import tempfile
+import json
 from datetime import datetime
 from typing import Optional, List
 import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import json
 
 from ocr.models import OcrResult, PassportData
+from config import settings
 from utils.logger import get_logger, get_file_logger
 from utils.passport_formatter import transliterate_to_latin
 
 logger = get_logger(__name__)
 debug_log = get_file_logger("hybrid.debug")
-
-# Lazy-loaded EasyOCR reader (expensive to init, keep in memory)
-_easyocr_reader = None
-
-
-def _get_easyocr_reader():
-    global _easyocr_reader
-    if _easyocr_reader is None:
-        import easyocr
-        logger.info("Initializing EasyOCR reader (first use)...")
-        _easyocr_reader = easyocr.Reader(['ru', 'en'], gpu=False)
-        logger.info("EasyOCR reader ready")
-    return _easyocr_reader
 
 
 class HybridResult:
@@ -56,22 +39,20 @@ class HybridResult:
         self.modules_used = modules_used
         self.raw_response = raw_response
         self.field_providers = field_providers or {}
-        # {module_name: PassportData} — full data each module found independently
         self.per_module_data: dict[str, PassportData] = per_module_data or {}
 
 
 class HybridRecognizer:
     """
-    Hybrid passport recognizer with 4-module pipeline:
-      1) rupasportread  - Tesseract MRZ reader
-      2) EasyOCR        - enhanced OCR with document detection
-      3) Yandex OCR     - cloud API (last resort for missing fields)
-      4) OpenRouter     - vision LLM, always runs
+    Hybrid passport recognizer with configurable module pipeline.
+
+    Module priority is determined by settings.ocr_module_priority.
+    Default: openrouter -> yandex_ocr -> rupasportread
     """
 
     ESSENTIAL_FIELDS = [
         'surname', 'name', 'passport_number',
-        'birth_date', 'gender', 'issue_date',
+        'birth_date', 'gender', 'expiry_date',
     ]
 
     def __init__(self, yandex_provider=None, openrouter_provider=None):
@@ -118,41 +99,19 @@ class HybridRecognizer:
 
     @staticmethod
     def _clean_latin_name(name: Optional[str]) -> Optional[str]:
-        """Fix common OCR artifacts in Latin names from MRZ.
-
-        Typical errors:
-          3  → CH   (Ч in MRZ → ICAO "CH", Tesseract reads as "3")
-          9  → strip (soft-sign artifact, e.g. RAMIL9 → RAMIL)
-          Q  → Y    (common tail confusion, DMITRIQ → DMITRIY)
-          0  → O    (zero → letter O inside a word)
-          8  → B    (eight → B inside a word)
-          5  → S    (five → S inside a word)
-        """
         if not name:
             return None
         original = name
-
-        # Upper-case for uniform processing
         name = name.upper()
 
-        # 3 → CH  (patronymic -VICH: ANDREEVI3 → ANDREEVICH)
         name = re.sub(r'3', 'CH', name)
-
-        # Q → Y at the end  (DMITRIQ → DMITRIY)
         name = re.sub(r'Q$', 'Y', name)
-        # Q → Y also before consonant cluster (less common but safe)
         name = re.sub(r'Q(?=[BCDFGHJKLMNPQRSTVWXYZ])', 'Y', name)
-
-        # Digit substitutions inside a word (surrounded by letters)
         name = re.sub(r'(?<=[A-Z])0(?=[A-Z])', 'O', name)
         name = re.sub(r'(?<=[A-Z])8(?=[A-Z])', 'B', name)
         name = re.sub(r'(?<=[A-Z])5(?=[A-Z])', 'S', name)
-
-        # Strip remaining leading/trailing digits  (RAMIL9 → RAMIL)
         name = re.sub(r'^\d+', '', name)
         name = re.sub(r'\d+$', '', name)
-
-        # Remove any remaining non-alpha chars except hyphen
         name = re.sub(r'[^A-Z\-]', '', name)
 
         if not name:
@@ -163,25 +122,15 @@ class HybridRecognizer:
 
     @staticmethod
     def _trim_patronymic(middle_name: Optional[str]) -> Optional[str]:
-        """Trim trailing garbage after -CH ending in patronymics.
-
-        Russian patronymics end with -VICH / -OVICH / -EVICH (male)
-        or -OVNA / -EVNA (female).
-        If extra chars appear after the valid ending, strip them.
-        E.g. KHOSHIMJONOVICHSS → KHOSHIMJONOVICH
-        """
         if not middle_name:
             return None
-        # Male patronymic: cut everything after last ...VICH / ...NICH
         m = re.match(r'^(.+(?:VICH|NICH|MICH))(.+)?$', middle_name, re.IGNORECASE)
         if m and m.group(2):
             tail = m.group(2)
-            # Keep tail only if it starts with another CH (double-Ч is impossible)
             if not tail.upper().startswith('CH'):
                 debug_log.debug("_trim_patronymic: %s -> %s (cut '%s')",
                                 middle_name, m.group(1), tail)
                 return m.group(1).upper()
-        # Female patronymic: ...OVNA / ...EVNA
         m = re.match(r'^(.+(?:OVNA|EVNA))(.+)?$', middle_name, re.IGNORECASE)
         if m and m.group(2):
             debug_log.debug("_trim_patronymic: %s -> %s (cut '%s')",
@@ -195,25 +144,19 @@ class HybridRecognizer:
         middle_name: Optional[str],
         surname: Optional[str] = None,
     ) -> Optional[str]:
-        """Infer gender from patronymic, surname, or first name endings.
-
-        Priority: patronymic > surname > first name.
-        """
-        # 1. Patronymic — most reliable signal
+        """Infer gender from patronymic, surname, or first name endings."""
         if middle_name:
             mn = middle_name.upper()
             if re.search(r'(?:VICH|NICH|MICH|UGLI|OGLI|ZODA)$', mn):
                 return 'M'
             if re.search(r'(?:OVNA|EVNA|ICHNA|QIZI|KIZI)$', mn):
                 return 'F'
-        # 2. Surname ending — reliable for Slavic/Turkic names
         if surname:
             sn = surname.upper()
             if re.search(r'(?:OVA|EVA|INA|SKAYA|CKAYA)$', sn):
                 return 'F'
             if re.search(r'(?:OV|EV|IN|SKIY|CKIY|SKOY|CKOY)$', sn):
                 return 'M'
-        # 3. First name ending — least reliable fallback
         if name:
             n = name.upper()
             if re.search(r'(?:A|YA|IA|INNA|ALLA)$', n):
@@ -224,13 +167,6 @@ class HybridRecognizer:
 
     @staticmethod
     def _name_quality(name: Optional[str]) -> int:
-        """Score a Latin name: higher is better.
-
-        +10  base (non-empty)
-        +len  longer names are usually more complete
-        -5   per digit remaining
-        -3   per non-alpha non-hyphen char
-        """
         if not name or not name.strip():
             return 0
         score = 10 + len(name)
@@ -243,7 +179,6 @@ class HybridRecognizer:
 
     @classmethod
     def _clean_passport_data(cls, data: PassportData) -> PassportData:
-        """Apply _clean_latin_name + _trim_patronymic to name fields."""
         updates = {}
         for f in cls.NAME_FIELDS:
             raw = getattr(data, f, None)
@@ -258,11 +193,11 @@ class HybridRecognizer:
         return data
 
     # ------------------------------------------------------------------
-    # Priority 1: rupasportread
+    # Module: rupasportread (Tesseract MRZ)
     # ------------------------------------------------------------------
     def _run_rupasportread(self, image_bytes: bytes) -> Optional[dict]:
         try:
-            import rupasportread
+            import utils.rupasportread as rupasportread
             result = rupasportread.recognize_from_bytes(image_bytes)
             return result
         except Exception as e:
@@ -285,123 +220,11 @@ class HybridRecognizer:
         )
 
     # ------------------------------------------------------------------
-    # Priority 2: EasyOCR enhanced
-    # ------------------------------------------------------------------
-    def _run_easyocr(self, image_bytes: bytes) -> Optional[PassportData]:
-        try:
-            from test_easyocr_enhanced import (
-                detect_and_crop_document,
-                preprocess_full,
-                preprocess_edge_strips,
-                preprocess_mrz,
-                extract_series_number,
-                extract_fio_from_mrz,
-                extract_meta_from_mrz,
-                extract_from_russian_text,
-                extract_fio_russian,
-            )
-            import cv2
-            import numpy as np
-
-            temp_dir = tempfile.mkdtemp(prefix='hybrid_ocr_')
-            try:
-                nparr = np.frombuffer(image_bytes, np.uint8)
-                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                if img is None:
-                    return None
-
-                temp_image = os.path.join(temp_dir, 'input.jpg')
-                cv2.imwrite(temp_image, img)
-                preproc_dir = os.path.join(temp_dir, 'preprocessed')
-
-                # Document detection & crop
-                cropped_path = detect_and_crop_document(temp_image, preproc_dir)
-                if cropped_path is None:
-                    return None
-
-                # Preprocessing
-                full_path = preprocess_full(cropped_path, preproc_dir)
-                strip_paths = preprocess_edge_strips(cropped_path, preproc_dir)
-                mrz_paths = preprocess_mrz(cropped_path, preproc_dir)
-
-                # OCR
-                reader = _get_easyocr_reader()
-                lines_full = reader.readtext(full_path)
-
-                strip_ocr_variants = []
-                for sp in strip_paths:
-                    lines = reader.readtext(sp)
-                    strip_ocr_variants.append(lines)
-
-                lines_mrz = []
-                for mp in mrz_paths:
-                    lines_mrz.extend(reader.readtext(mp))
-
-                all_mrz_lines = lines_mrz + lines_full
-
-                # Extract data
-                series, number = extract_series_number(
-                    strip_ocr_variants, lines_full
-                )
-                surname_lat, name_lat, middle_lat = extract_fio_from_mrz(
-                    all_mrz_lines
-                )
-                mrz_meta = extract_meta_from_mrz(all_mrz_lines)
-                birth_date_mrz = mrz_meta.get('birth_date')
-                gender_mrz = mrz_meta.get('gender')
-
-                birth_date_ru, issue_date_ru, gender_ru = \
-                    extract_from_russian_text(lines_full)
-
-                (surname_lat_fb, name_lat_fb, middle_lat_fb,
-                 _surname_ru, _name_ru, _middle_ru) = extract_fio_russian(
-                    lines_full
-                )
-
-                # Merge EasyOCR-internal sources (MRZ > transliteration)
-                fio_surname = surname_lat or surname_lat_fb
-                fio_name = name_lat or name_lat_fb
-                fio_middle = middle_lat or middle_lat_fb
-                birth_date = birth_date_ru or birth_date_mrz
-                issue_date = issue_date_ru
-                gender = gender_ru or gender_mrz
-
-                passport_number = None
-                if series and number:
-                    passport_number = f"{series} {number}"
-
-                return PassportData(
-                    surname=fio_surname,
-                    name=fio_name,
-                    middle_name=fio_middle,
-                    birth_date=birth_date,
-                    issue_date=issue_date,
-                    gender=gender,
-                    passport_number=passport_number,
-                )
-            finally:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-
-        except Exception as e:
-            logger.warning("EasyOCR failed", error=str(e))
-            import traceback
-            traceback.print_exc()
-            return None
-
-    # ------------------------------------------------------------------
     # Merge helper
     # ------------------------------------------------------------------
     @classmethod
     def _merge(cls, base: PassportData, supplement: PassportData,
                ) -> tuple[PassportData, set]:
-        """Merge two PassportData.
-
-        For regular fields: base wins if non-empty.
-        For name fields (surname, name, middle_name): pick the higher-quality
-        value when both are present (longer, no digit artifacts).
-
-        Returns (merged PassportData, set of field names won by supplement).
-        """
         merged = {}
         supplement_wins: set = set()
         for field_name in base.model_fields:
@@ -412,7 +235,6 @@ class HybridRecognizer:
             supp_filled = supp_val is not None and str(supp_val).strip()
 
             if field_name in cls.NAME_FIELDS and base_filled and supp_filled:
-                # Both modules found this name → pick better one
                 bq = cls._name_quality(str(base_val))
                 sq = cls._name_quality(str(supp_val))
                 if sq > bq:
@@ -431,7 +253,6 @@ class HybridRecognizer:
 
     @staticmethod
     def _get_filled_fields(data: PassportData) -> set:
-        """Return set of field names that have non-empty values."""
         filled = set()
         for field_name in data.model_fields:
             val = getattr(data, field_name)
@@ -440,11 +261,75 @@ class HybridRecognizer:
         return filled
 
     # ------------------------------------------------------------------
+    # Module runners
+    # ------------------------------------------------------------------
+    async def _run_module_openrouter(
+        self, image_bytes: bytes, mime_type: str
+    ) -> Optional[PassportData]:
+        """Run OpenRouter vision LLM module."""
+        if not self.openrouter_provider:
+            debug_log.debug("[openrouter] SKIPPED — no provider configured")
+            return None
+        try:
+            result = await self.openrouter_provider.recognize_passport(
+                image_bytes, mime_type
+            )
+            if result.success and result.passport_data:
+                return result.passport_data
+        except Exception as e:
+            logger.error("OpenRouter failed", error=str(e))
+        return None
+
+    async def _run_module_yandex(
+        self, image_bytes: bytes, mime_type: str
+    ) -> Optional[PassportData]:
+        """Run Yandex OCR module."""
+        if not self.yandex_provider:
+            debug_log.debug("[yandex_ocr] SKIPPED — no provider configured")
+            return None
+        try:
+            result = await self.yandex_provider.recognize_passport(
+                image_bytes, mime_type
+            )
+            if result.success and result.passport_data:
+                yd = result.passport_data
+                # Transliterate Cyrillic names to Latin
+                _cyr = 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя'
+                if yd.surname and any(c in yd.surname for c in _cyr):
+                    yd.surname = transliterate_to_latin(yd.surname)
+                if yd.name and any(c in yd.name for c in _cyr):
+                    yd.name = transliterate_to_latin(yd.name)
+                if yd.middle_name and any(c in yd.middle_name for c in _cyr):
+                    yd.middle_name = transliterate_to_latin(yd.middle_name)
+                return yd
+        except Exception as e:
+            logger.error("Yandex OCR failed", error=str(e))
+        return None
+
+    async def _run_module_rupasportread(
+        self, image_bytes: bytes, mime_type: str
+    ) -> Optional[PassportData]:
+        """Run rupasportread (Tesseract MRZ) module."""
+        try:
+            raw = await asyncio.to_thread(self._run_rupasportread, image_bytes)
+            if raw:
+                return self._rupasportread_to_passport_data(raw)
+        except Exception as e:
+            logger.error("rupasportread failed", error=str(e))
+        return None
+
+    # Module dispatcher
+    _MODULE_MAP = {
+        'openrouter': '_run_module_openrouter',
+        'yandex_ocr': '_run_module_yandex',
+        'rupasportread': '_run_module_rupasportread',
+    }
+
+    # ------------------------------------------------------------------
     # Main pipeline
     # ------------------------------------------------------------------
     @staticmethod
     def _passport_data_to_debug_dict(data: PassportData) -> dict:
-        """Serialize PassportData for debug logging (dates -> str)."""
         return {k: str(v) if v is not None else None
                 for k, v in data.model_dump().items()}
 
@@ -453,203 +338,61 @@ class HybridRecognizer:
         image_bytes: bytes,
         mime_type: str = "JPEG",
     ) -> HybridResult:
-        """
-        Run the hybrid recognition pipeline.
-
-        Returns HybridResult with passport_data, modules_used list,
-        raw_response dict, field_providers mapping,
-        and per_module_data with full data each module found.
-        """
+        """Run the hybrid recognition pipeline with configurable priority."""
         modules_used: List[str] = []
         current_data = PassportData()
         raw_responses: dict = {}
         field_providers: dict = {}
         per_module_data: dict[str, PassportData] = {}
 
+        priority = settings.get_module_priority()
+        total = len(priority)
+
         debug_log.debug("=" * 60)
-        debug_log.debug("HYBRID PIPELINE START  image_size=%d  mime=%s",
-                        len(image_bytes), mime_type)
+        debug_log.debug("HYBRID PIPELINE START  image_size=%d  mime=%s  priority=%s",
+                        len(image_bytes), mime_type, priority)
 
-        # ---- Priority 1: rupasportread (Tesseract MRZ) ----
-        logger.info("Hybrid: [1/4] rupasportread...")
-        rpr_result = await asyncio.to_thread(
-            self._run_rupasportread, image_bytes
-        )
+        for idx, module_key in enumerate(priority):
+            method_name = self._MODULE_MAP.get(module_key)
+            if not method_name:
+                logger.warning("Unknown OCR module: %s, skipping", module_key)
+                continue
 
-        if rpr_result:
-            rpr_data = self._rupasportread_to_passport_data(rpr_result)
-            rpr_data = self._clean_passport_data(rpr_data)
-            per_module_data["rupasportread"] = rpr_data
+            # Skip if all essential fields already filled (except first module)
+            if idx > 0 and self._count_essential(current_data) >= len(self.ESSENTIAL_FIELDS):
+                debug_log.debug("[%s] SKIPPED — all essential fields filled", module_key)
+                continue
 
-            debug_log.debug("[rupasportread] raw_result=%s",
-                           json.dumps(rpr_result, ensure_ascii=False, default=str))
-            debug_log.debug("[rupasportread] parsed=%s",
-                           json.dumps(self._passport_data_to_debug_dict(rpr_data),
-                                      ensure_ascii=False))
+            logger.info("Hybrid: [%d/%d] %s...", idx + 1, total, module_key)
 
-            filled_before = self._get_filled_fields(current_data)
-            current_data, _ = self._merge(current_data, rpr_data)
-            filled_after = self._get_filled_fields(current_data)
-            new_fields = filled_after - filled_before
-            for f in new_fields:
-                field_providers[f] = "rupasportread"
-            modules_used.append("rupasportread")
-            raw_responses['rupasportread'] = rpr_result
-            logger.info(
-                "rupasportread done",
-                filled=current_data.count_filled_fields(),
-                essential=self._count_essential(current_data),
-                new_fields=list(new_fields),
-            )
-        else:
-            debug_log.debug("[rupasportread] returned None")
-            logger.info("rupasportread: no result")
+            method = getattr(self, method_name)
+            mod_data = await method(image_bytes, mime_type)
 
-        # ---- Priority 2: EasyOCR (if essential fields still missing) ----
-        if self._count_essential(current_data) < len(self.ESSENTIAL_FIELDS):
-            logger.info("Hybrid: [2/4] EasyOCR...")
-            easyocr_data = await asyncio.to_thread(
-                self._run_easyocr, image_bytes
-            )
+            if mod_data:
+                mod_data = self._clean_passport_data(mod_data)
+                per_module_data[module_key] = mod_data
 
-            if easyocr_data:
-                easyocr_data = self._clean_passport_data(easyocr_data)
-                per_module_data["easyocr"] = easyocr_data
-
-                debug_log.debug("[easyocr] parsed=%s",
-                               json.dumps(self._passport_data_to_debug_dict(easyocr_data),
+                debug_log.debug("[%s] parsed=%s", module_key,
+                               json.dumps(self._passport_data_to_debug_dict(mod_data),
                                           ensure_ascii=False))
 
                 filled_before = self._get_filled_fields(current_data)
-                current_data, supp_wins = self._merge(current_data, easyocr_data)
+                current_data, supp_wins = self._merge(current_data, mod_data)
                 filled_after = self._get_filled_fields(current_data)
                 new_fields = filled_after - filled_before
                 for f in new_fields | supp_wins:
-                    field_providers[f] = "easyocr"
-                modules_used.append("easyocr")
-                raw_responses['easyocr'] = easyocr_data.model_dump(
-                    mode='json'
-                )
+                    field_providers[f] = module_key
+                modules_used.append(module_key)
+
                 logger.info(
-                    "EasyOCR done",
+                    "%s done", module_key,
                     filled=current_data.count_filled_fields(),
                     essential=self._count_essential(current_data),
                     new_fields=list(new_fields),
                 )
             else:
-                debug_log.debug("[easyocr] returned None")
-                logger.info("EasyOCR: no result")
-        else:
-            debug_log.debug("[easyocr] SKIPPED — all essential fields filled")
-
-        # ---- Priority 3: Yandex OCR (last resort) ----
-        if (
-            self._count_essential(current_data) < len(self.ESSENTIAL_FIELDS)
-            and self.yandex_provider
-        ):
-            logger.info("Hybrid: [3/4] Yandex OCR...")
-            try:
-                yandex_result = await self.yandex_provider.recognize_passport(
-                    image_bytes, mime_type
-                )
-                if yandex_result.success and yandex_result.passport_data:
-                    yd = yandex_result.passport_data
-                    # Transliterate Cyrillic names to Latin for consistency
-                    if yd.surname and any(
-                        c in yd.surname for c in 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя'
-                    ):
-                        yd.surname = transliterate_to_latin(yd.surname)
-                    if yd.name and any(
-                        c in yd.name for c in 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя'
-                    ):
-                        yd.name = transliterate_to_latin(yd.name)
-                    if yd.middle_name and any(
-                        c in yd.middle_name for c in 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя'
-                    ):
-                        yd.middle_name = transliterate_to_latin(yd.middle_name)
-
-                    yd = self._clean_passport_data(yd)
-                    per_module_data["yandex_ocr"] = yd
-
-                    debug_log.debug("[yandex_ocr] parsed=%s",
-                                   json.dumps(self._passport_data_to_debug_dict(yd),
-                                              ensure_ascii=False))
-                    debug_log.debug("[yandex_ocr] raw_entities=%s",
-                                   json.dumps(
-                                       yandex_result.raw_response.get("result", {})
-                                       .get("textAnnotation", {})
-                                       .get("entities", []),
-                                       ensure_ascii=False, default=str))
-
-                    filled_before = self._get_filled_fields(current_data)
-                    current_data, supp_wins = self._merge(current_data, yd)
-                    filled_after = self._get_filled_fields(current_data)
-                    new_fields = filled_after - filled_before
-                    for f in new_fields | supp_wins:
-                        field_providers[f] = "yandex_ocr"
-                    modules_used.append("yandex_ocr")
-                    raw_responses['yandex_ocr'] = yandex_result.raw_response
-                    logger.info(
-                        "Yandex OCR done",
-                        filled=current_data.count_filled_fields(),
-                        new_fields=list(new_fields),
-                    )
-            except Exception as e:
-                debug_log.debug("[yandex_ocr] EXCEPTION: %s", e, exc_info=True)
-                logger.error("Yandex OCR failed", error=str(e))
-        else:
-            if self._count_essential(current_data) >= len(self.ESSENTIAL_FIELDS):
-                debug_log.debug("[yandex_ocr] SKIPPED — all essential fields filled")
-            elif not self.yandex_provider:
-                debug_log.debug("[yandex_ocr] SKIPPED — no provider configured")
-
-        # ---- Module 4: OpenRouter vision LLM (always runs) ----
-        if self.openrouter_provider:
-            logger.info("Hybrid: [4/4] OpenRouter LLM...")
-            try:
-                or_result = await self.openrouter_provider.recognize_passport(
-                    image_bytes, mime_type
-                )
-                if or_result.success and or_result.passport_data:
-                    or_data = or_result.passport_data
-                    or_data = self._clean_passport_data(or_data)
-                    per_module_data["openrouter"] = or_data
-
-                    debug_log.debug("[openrouter] parsed=%s",
-                                   json.dumps(self._passport_data_to_debug_dict(or_data),
-                                              ensure_ascii=False))
-
-                    filled_before = self._get_filled_fields(current_data)
-                    current_data, supp_wins = self._merge(current_data, or_data)
-                    filled_after = self._get_filled_fields(current_data)
-                    new_fields = filled_after - filled_before
-                    for f in new_fields | supp_wins:
-                        field_providers[f] = "openrouter"
-                    modules_used.append("openrouter")
-                    raw_responses['openrouter'] = or_result.raw_response
-                    logger.info(
-                        "OpenRouter done",
-                        filled=current_data.count_filled_fields(),
-                        new_fields=list(new_fields),
-                    )
-            except Exception as e:
-                debug_log.debug("[openrouter] EXCEPTION: %s", e, exc_info=True)
-                logger.error("OpenRouter failed", error=str(e))
-        else:
-            debug_log.debug("[openrouter] SKIPPED — no provider configured")
-
-        # ---- Post-processing: Yandex priority for passport_number ----
-        if "yandex_ocr" in per_module_data:
-            yd = per_module_data["yandex_ocr"]
-            if yd.passport_number and yd.passport_number.strip():
-                old_pn = current_data.passport_number
-                if old_pn != yd.passport_number:
-                    debug_log.debug(
-                        "Yandex passport_number override: %s -> %s",
-                        old_pn, yd.passport_number)
-                    current_data = current_data.model_copy(
-                        update={"passport_number": yd.passport_number})
-                    field_providers["passport_number"] = "yandex_ocr"
+                debug_log.debug("[%s] returned None", module_key)
+                logger.info("%s: no result", module_key)
 
         # ---- Post-processing: infer gender from name/patronymic ----
         if not current_data.gender or not current_data.gender.strip():
@@ -665,7 +408,6 @@ class HybridRecognizer:
         if not modules_used:
             modules_used.append("none")
 
-        # Final debug summary
         debug_log.debug("MERGED RESULT: %s",
                         json.dumps(self._passport_data_to_debug_dict(current_data),
                                    ensure_ascii=False))

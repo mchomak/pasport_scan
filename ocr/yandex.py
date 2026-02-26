@@ -76,15 +76,13 @@ class YandexOcrProvider(OcrProvider):
         # Field names match Yandex OCR API response structure (see ocr_test.py)
         passport_data = PassportData(
             passport_number=entity_map.get("number"),
-            issued_by=entity_map.get("issued_by"),  # Fixed: was "issue_place"
-            issue_date=self._parse_date(entity_map.get("issue_date")),
-            subdivision_code=entity_map.get("subdivision"),
             surname=entity_map.get("surname"),
             name=entity_map.get("name"),
             middle_name=entity_map.get("middle_name"),
             gender=entity_map.get("gender"),
             birth_date=self._parse_date(entity_map.get("birth_date")),
             birth_place=entity_map.get("birth_place"),
+            expiry_date=self._parse_date(entity_map.get("expiry_date")),
         )
 
         return passport_data

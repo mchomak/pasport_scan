@@ -24,7 +24,6 @@ from utils.logger import get_logger
 from utils.passport_formatter import (
     format_passport_type1,
     format_passport_type2,
-    calculate_expiry_date,
     infer_gender,
 )
 
@@ -145,7 +144,7 @@ async def handle_photo(message: Message, bot: Bot):
         await message.answer("Файл слишком большой. Максимальный размер: 20 МБ")
         return
 
-    status_msg = await message.reply("Обрабатываю фото (гибридное распознавание)...")
+    status_msg = await message.reply("Обрабатываю фото...")
 
     try:
         # Download photo
@@ -210,7 +209,7 @@ async def handle_document(message: Message, bot: Bot):
         )
         return
 
-    status_msg = await message.reply("Обрабатываю документ (гибридное распознавание)...")
+    status_msg = await message.reply("Обрабатываю документ...")
 
     try:
         # Download document
@@ -252,14 +251,11 @@ async def handle_document(message: Message, bot: Bot):
 
 _PROVIDER_LABELS = {
     'rupasportread': 'Tesseract MRZ',
-    'easyocr': 'EasyOCR',
     'yandex_ocr': 'Yandex OCR',
     'openrouter': 'OpenRouter LLM',
     'inferred': 'Из имени',
     'none': '-',
 }
-
-_PROVIDER_ORDER = ['rupasportread', 'easyocr', 'yandex_ocr', 'openrouter']
 
 _FIELD_LABELS = {
     'surname': 'Фамилия',
@@ -267,54 +263,39 @@ _FIELD_LABELS = {
     'middle_name': 'Отчество',
     'passport_number': 'Серия и номер',
     'birth_date': 'Дата рождения',
-    'issue_date': 'Дата выдачи',
+    'expiry_date': 'Срок действия',
     'gender': 'Пол',
     'birth_place': 'Место рождения',
-    'issued_by': 'Кем выдан',
-    'subdivision_code': 'Код подразделения',
 }
 
 
-def _format_modules_used(modules: list[str]) -> str:
-    """Format module names for display."""
-    return ' + '.join(_PROVIDER_LABELS.get(m, m) for m in modules)
-
-
-def _format_module_block(module_key: str, data) -> str:
-    """Format a single module's full results (all fields)."""
-    label = _PROVIDER_LABELS.get(module_key, module_key)
-    lines = [f"[{label}]"]
-    found_any = False
-    for field_name, field_label in _FIELD_LABELS.items():
-        val = getattr(data, field_name, None)
-        if val is not None and str(val).strip():
-            lines.append(f"  + {field_label}: {val}")
-            found_any = True
-        else:
-            lines.append(f"  - {field_label}: ---")
-    if not found_any:
-        lines.append("  (ничего не найдено)")
-    return '\n'.join(lines)
-
-
-def _format_provider_details(
+def _format_details(
     passport_data,
     field_providers: dict,
     modules_used: list[str],
     per_module_data: dict,
 ) -> str:
-    """Build full per-module data blocks + final merged result."""
+    """Build collapsed detail text showing per-module results."""
     lines: list[str] = []
 
-    # Per-module blocks — show what each module found independently
-    for module_key in _PROVIDER_ORDER:
+    # Per-module blocks
+    priority = settings.get_module_priority()
+    for module_key in priority:
         if module_key in per_module_data:
-            lines.append(_format_module_block(module_key, per_module_data[module_key]))
+            label = _PROVIDER_LABELS.get(module_key, module_key)
+            lines.append(f"[{label}]")
+            data = per_module_data[module_key]
+            for field_name, field_label in _FIELD_LABELS.items():
+                val = getattr(data, field_name, None)
+                if val is not None and str(val).strip():
+                    lines.append(f"  + {field_label}: {val}")
+                else:
+                    lines.append(f"  - {field_label}: ---")
             lines.append("")
 
-    # Modules that were skipped
+    # Skipped modules
     skipped = [
-        _PROVIDER_LABELS.get(m, m) for m in _PROVIDER_ORDER
+        _PROVIDER_LABELS.get(m, m) for m in priority
         if m not in per_module_data
     ]
     if skipped:
@@ -322,14 +303,14 @@ def _format_provider_details(
         lines.append("")
 
     # Final merged result with source attribution
-    lines.append("[Итог (объединённые данные)]")
+    lines.append("[Итог]")
     for field_name, field_label in _FIELD_LABELS.items():
         val = getattr(passport_data, field_name, None)
         if val is not None and str(val).strip():
             src = _PROVIDER_LABELS.get(field_providers.get(field_name, '?'), '?')
             lines.append(f"  {field_label}: {val}  ({src})")
         else:
-            lines.append(f"  {field_label}: --- не найдено")
+            lines.append(f"  {field_label}: ---")
 
     return '\n'.join(lines)
 
@@ -383,9 +364,7 @@ async def process_image(
                 source_message_id=source_message_id,
                 source_page_index=None,
                 passport_number=passport_data.passport_number,
-                issued_by=passport_data.issued_by,
-                issue_date=passport_data.issue_date,
-                subdivision_code=passport_data.subdivision_code,
+                expiry_date=passport_data.expiry_date,
                 surname=passport_data.surname,
                 name=passport_data.name,
                 middle_name=passport_data.middle_name,
@@ -400,20 +379,8 @@ async def process_image(
             format1 = format_passport_type1(passport_data)
             format2 = format_passport_type2(passport_data)
 
-            # Check expiry date correction
-            _, expiry_corrected, years_added = calculate_expiry_date(
-                passport_data.birth_date, passport_data.issue_date,
-                passport_data.passport_number)
-            expiry_warning = ""
-            if expiry_corrected:
-                expiry_warning = (
-                    "\n--- ВНИМАНИЕ ---\n"
-                    "Дата действия паспорта была в прошлом. "
-                    f"Дата скорректирована (+{years_added} лет) в форматах ниже.\n"
-                )
-
-            # Build detailed provider attribution
-            provider_details = _format_provider_details(
+            # Build collapsed detail text
+            details = _format_details(
                 passport_data,
                 hybrid_result.field_providers,
                 modules_used,
@@ -421,15 +388,11 @@ async def process_image(
             )
 
             response_text = (
-                f"Распознавание завершено\n\n"
-                f"ID записи: {record.id}\n"
-                f"Заполнено полей: {quality_score}/10\n\n"
-                f"--- Детализация по провайдерам ---\n"
-                f"{provider_details}\n"
-                f"{expiry_warning}\n"
-                f"--- Закодированные форматы ---\n"
-                f"<code>{format1}</code>\n\n"
-                f"<code>{format2}</code>"
+                f"<code>{format1}</code>\n"
+                f"<code>{format2}</code>\n"
+                f"<blockquote expandable>"
+                f"{details}"
+                f"</blockquote>"
             )
 
             await status_msg.edit_text(response_text, parse_mode="HTML")
@@ -467,7 +430,7 @@ async def process_pdf(
         # Process each page
         for image_bytes, page_index in pages:
             page_status = await message.reply(
-                f"Обрабатываю страницу {page_index + 1} (гибридное распознавание)..."
+                f"Обрабатываю страницу {page_index + 1}..."
             )
 
             try:
@@ -510,9 +473,7 @@ async def process_pdf(
                         source_message_id=source_message_id,
                         source_page_index=page_index,
                         passport_number=passport_data.passport_number,
-                        issued_by=passport_data.issued_by,
-                        issue_date=passport_data.issue_date,
-                        subdivision_code=passport_data.subdivision_code,
+                        expiry_date=passport_data.expiry_date,
                         surname=passport_data.surname,
                         name=passport_data.name,
                         middle_name=passport_data.middle_name,
@@ -527,20 +488,8 @@ async def process_pdf(
                     format1 = format_passport_type1(passport_data)
                     format2 = format_passport_type2(passport_data)
 
-                    # Check expiry date correction
-                    _, expiry_corrected, years_added = calculate_expiry_date(
-                        passport_data.birth_date, passport_data.issue_date,
-                        passport_data.passport_number)
-                    expiry_warning = ""
-                    if expiry_corrected:
-                        expiry_warning = (
-                            "\n--- ВНИМАНИЕ ---\n"
-                            "Дата действия паспорта была в прошлом. "
-                            f"Дата скорректирована (+{years_added} лет) в форматах ниже.\n"
-                        )
-
-                    # Build detailed provider attribution
-                    provider_details = _format_provider_details(
+                    # Build collapsed detail text
+                    details = _format_details(
                         passport_data,
                         hybrid_result.field_providers,
                         modules_used,
@@ -548,15 +497,12 @@ async def process_pdf(
                     )
 
                     response_text = (
-                        f"Страница {page_index + 1} обработана\n\n"
-                        f"ID записи: {record.id}\n"
-                        f"Заполнено полей: {quality_score}/10\n\n"
-                        f"--- Детализация по провайдерам ---\n"
-                        f"{provider_details}\n"
-                        f"{expiry_warning}\n"
-                        f"--- Закодированные форматы ---\n"
-                        f"<code>{format1}</code>\n\n"
-                        f"<code>{format2}</code>"
+                        f"Стр. {page_index + 1}\n"
+                        f"<code>{format1}</code>\n"
+                        f"<code>{format2}</code>\n"
+                        f"<blockquote expandable>"
+                        f"{details}"
+                        f"</blockquote>"
                     )
 
                     await page_status.edit_text(response_text, parse_mode="HTML")
@@ -565,10 +511,10 @@ async def process_pdf(
             except Exception as e:
                 logger.error("PDF page processing failed", page=page_index, error=str(e))
                 await page_status.edit_text(
-                    f"❌ Страница {page_index + 1}: ошибка распознавания"
+                    f"Страница {page_index + 1}: ошибка распознавания"
                 )
 
-        await status_msg.edit_text(f"✅ PDF обработан ({len(pages)} стр.)")
+        await status_msg.edit_text(f"PDF обработан ({len(pages)} стр.)")
 
     except Exception as e:
         logger.error("PDF processing failed", error=str(e))

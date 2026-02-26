@@ -1,23 +1,15 @@
 """Passport data formatting utilities."""
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 from ocr.models import PassportData
+from config import settings
 
 
 def transliterate_to_latin(text: Optional[str]) -> str:
-    """
-    Транслитерация кириллицы в латиницу.
-
-    Args:
-        text: Текст на кириллице
-
-    Returns:
-        Текст латиницей
-    """
+    """Транслитерация кириллицы в латиницу."""
     if not text:
         return "unknown"
 
-    # Таблица транслитерации (ГОСТ 7.79-2000, система Б)
     translit_map = {
         'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
         'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
@@ -47,27 +39,9 @@ def get_country_code(
     surname: Optional[str] = None,
     name: Optional[str] = None,
 ) -> str:
-    """
-    Определяет код страны по месту рождения, серии паспорта и ФИО.
-
-    Приоритет:
-      1) Место рождения (самый надёжный)
-      2) Серия паспорта (1-й/2-й символ — код региона РФ)
-      3) По умолчанию «ru»
-
-    Args:
-        birth_place: Место рождения
-        passport_number: Серия и номер паспорта
-        surname: Фамилия (лат.)
-        name: Имя (лат.)
-
-    Returns:
-        Код страны ISO‑2 (ru, uz, tj, kg, kz, az, am, md, by, ua, ge, tm)
-    """
-    # ---- 1. По месту рождения ----
+    """Определяет код страны по месту рождения, серии паспорта и ФИО."""
     if birth_place:
         bp = birth_place.lower()
-        # Узбекистан
         if any(w in bp for w in [
             "узбек", "uzbek", "ташкент", "tashkent", "самарканд",
             "samarkand", "бухара", "bukhara", "фергана", "fergana",
@@ -77,115 +51,82 @@ def get_country_code(
             "jizzakh", "джизак", "syrdarya", "сырдар",
         ]):
             return "uz"
-        # Таджикистан
         if any(w in bp for w in [
             "таджик", "tajik", "душанбе", "dushanbe", "худжанд",
             "khujand", "хатлон", "khatlon", "бохтар", "bokhtar",
             "курган-тюбе", "kurgan", "куляб", "kulyab", "kulob",
         ]):
             return "tj"
-        # Киргизия
         if any(w in bp for w in [
             "кирги", "кыргы", "kyrgyz", "бишкек", "bishkek",
             "ош", "osh ", "джалал", "jalal", "нарын", "naryn",
             "каракол", "karakol", "иссык", "issyk",
         ]):
             return "kg"
-        # Казахстан
         if any(w in bp for w in [
             "казах", "kazakh", "алматы", "almaty", "астана", "astana",
             "нур-султан", "nur-sultan", "караганд", "karagand",
             "шымкент", "shymkent", "актобе", "aktobe", "атырау", "atyrau",
         ]):
             return "kz"
-        # Азербайджан
         if any(w in bp for w in [
             "азербайджан", "azerba", "баку", "baku", "гянджа",
             "ganja", "сумгаит", "sumgait",
         ]):
             return "az"
-        # Армения
         if any(w in bp for w in [
             "армени", "armen", "ереван", "yerevan", "гюмри", "gyumri",
         ]):
             return "am"
-        # Молдова
         if any(w in bp for w in [
             "молдов", "молдав", "moldov", "кишин", "chisinau",
         ]):
             return "md"
-        # Беларусь
         if any(w in bp for w in [
             "беларус", "белорус", "belarus", "минск", "minsk",
             "гомель", "gomel", "брест", "brest", "гродно", "grodno",
             "витебск", "vitebsk", "могилев", "mogilev",
         ]):
             return "by"
-        # Украина
         if any(w in bp for w in [
             "украин", "ukrain", "киев", "kyiv", "kiev", "одесс",
             "odess", "харьков", "kharkiv", "днепр", "dnipr",
             "львов", "lviv", "запорож", "zapori", "донецк", "donetsk",
         ]):
             return "ua"
-        # Грузия
         if any(w in bp for w in [
             "грузи", "georgi", "тбилис", "tbilisi", "батуми", "batumi",
         ]):
             return "ge"
-        # Туркменистан
         if any(w in bp for w in [
             "туркмен", "turkmen", "ашхабад", "ashgabat",
         ]):
             return "tm"
 
-    # ---- 2. По серии паспорта (российский внутренний) ----
-    # Серия XX YY, первые 2 цифры — код региона ОКАТО.
-    # Если серия есть и это 10-значный номер — скорее всего РФ.
     if passport_number:
         digits = passport_number.replace(" ", "")
         if len(digits) == 10 and digits.isdigit():
             return "ru"
 
-    # По умолчанию
     return "ru"
 
 
 def get_document_type(passport_number: Optional[str]) -> str:
-    """
-    Определяет тип документа.
-
-    Args:
-        passport_number: Номер паспорта
-
-    Returns:
-        Тип документа (NP, PSP, PS)
-    """
+    """Определяет тип документа."""
     if not passport_number:
         return "PS"
 
-    # Российский внутренний паспорт: серия 4 цифры + номер 6 цифр (4619709685)
     if len(passport_number.replace(" ", "")) == 10:
         return "PS"
 
-    # Заграничный паспорт РФ: начинается с цифр (72, 73, 74...)
     if passport_number and passport_number[0].isdigit() and len(passport_number) >= 9:
         return "PSP"
 
-    # Национальный паспорт других стран
     return "NP"
 
 
 def get_gender_code(gender: Optional[str]) -> str:
-    """
-    Преобразует пол в код.
-
-    Args:
-        gender: Пол (муж/жен)
-
-    Returns:
-        Код пола (m/f)
-    """
+    """Преобразует пол в код."""
     if not gender:
         return "m"
 
@@ -196,67 +137,46 @@ def get_gender_code(gender: Optional[str]) -> str:
     return "m"
 
 
-def infer_gender(middle_name: Optional[str]) -> Optional[str]:
-    """
-    Определяет пол по отчеству/патрониму.
+def infer_gender(
+    middle_name: Optional[str] = None,
+    surname: Optional[str] = None,
+) -> Optional[str]:
+    """Определяет пол по отчеству/патрониму и фамилии."""
+    if middle_name:
+        mn = middle_name.lower()
+        if any(mn.endswith(s) for s in [
+            "ович", "евич", "ич",
+            "ovich", "evich",
+            "ugli", "ogli", "o'g'li",
+            "зода", "zoda",
+        ]):
+            return "male"
+        if any(mn.endswith(s) for s in [
+            "овна", "евна", "ична",
+            "ovna", "evna",
+            "qizi", "kizi",
+        ]):
+            return "female"
 
-    Args:
-        middle_name: Отчество
-
-    Returns:
-        "male" / "female" / None
-    """
-    if not middle_name:
-        return None
-
-    mn = middle_name.lower()
-
-    # Мужские окончания
-    if any(mn.endswith(s) for s in [
-        "ович", "евич", "ич",              # рус. кириллица
-        "ovich", "evich",                   # рус. латиница
-        "ugli", "ogli", "o'g'li",          # узб.
-        "зода", "zoda",                     # тадж.
-    ]):
-        return "male"
-
-    # Женские окончания
-    if any(mn.endswith(s) for s in [
-        "овна", "евна", "ична",            # рус. кириллица
-        "ovna", "evna",                     # рус. латиница
-        "qizi", "kizi",                     # узб.
-    ]):
-        return "female"
+    if surname:
+        sn = surname.lower()
+        if any(sn.endswith(s) for s in ["ova", "eva", "ina", "ова", "ева", "ина"]):
+            return "female"
+        if any(sn.endswith(s) for s in ["ov", "ev", "in", "ов", "ев", "ин"]):
+            return "male"
 
     return None
 
 
 def format_date_short(d: Optional[date]) -> str:
-    """
-    Форматирует дату в короткий формат DDMMYY.
-
-    Args:
-        d: Дата
-
-    Returns:
-        Строка вида "100805"
-    """
+    """Форматирует дату в короткий формат DDMMYY."""
     if not d:
         return "000000"
-
     return d.strftime("%d%m%y")
 
 
 def format_date_long(d: Optional[date]) -> str:
-    """
-    Форматирует дату в длинный формат DDmmmYY.
-
-    Args:
-        d: Дата
-
-    Returns:
-        Строка вида "10aug05"
-    """
+    """Форматирует дату в длинный формат DDmmmYY."""
     if not d:
         return "00xxx00"
 
@@ -272,116 +192,37 @@ def format_date_long(d: Optional[date]) -> str:
     return f"{day}{month}{year}"
 
 
-def _safe_date_add_years(d: date, years: int) -> date:
-    """Безопасно прибавляет годы к дате (обработка 29 февраля)."""
-    try:
-        return date(d.year + years, d.month, d.day)
-    except ValueError:
-        # 29 февраля в невисокосный год → 28 февраля
-        return date(d.year + years, d.month, d.day - 1)
+def _build_format_vars(data: PassportData) -> dict[str, str]:
+    """Build all template variables from passport data."""
+    country = get_country_code(
+        data.birth_place, data.passport_number, data.surname, data.name)
+    number = (data.passport_number or "0000000000").replace(" ", "").lower()
+    surname = transliterate_to_latin(data.surname).lower()
+    name = transliterate_to_latin(data.name).lower()
+    gender = get_gender_code(data.gender)
+    doc_type = get_document_type(data.passport_number)
 
-
-def calculate_expiry_date(
-    birth_date: Optional[date],
-    issue_date: Optional[date],
-    passport_number: Optional[str] = None,
-) -> tuple[Optional[date], bool, int]:
-    """
-    Рассчитывает срок действия паспорта.
-
-    Для российского внутреннего паспорта (PS):
-    - До 20 лет → действует до 20 лет
-    - До 45 лет → действует до 45 лет
-    - После 45 → бессрочно (ставим +20 лет для формата)
-
-    Для остальных паспортов (NP, PSP):
-    - Дата выдачи + 10 лет
-
-    Если рассчитанная дата уже в прошлом — прибавляем по 10 лет,
-    пока дата не окажется в будущем.
-
-    Args:
-        birth_date: Дата рождения
-        issue_date: Дата выдачи
-        passport_number: Серия и номер паспорта (для определения типа)
-
-    Returns:
-        (expiry_date, was_corrected, years_added) — дата, флаг коррекции, кол-во лет
-    """
-    if not birth_date or not issue_date:
-        return None, False, 0
-
-    doc_type = get_document_type(passport_number)
-
-    if doc_type == "PS":
-        # Российский внутренний паспорт — по возрасту
-        age_at_issue = issue_date.year - birth_date.year
-        if age_at_issue < 20:
-            expiry = _safe_date_add_years(birth_date, 20)
-        elif age_at_issue < 45:
-            expiry = _safe_date_add_years(birth_date, 45)
-        else:
-            expiry = _safe_date_add_years(issue_date, 20)
-    else:
-        # Иностранные / национальные паспорта — дата выдачи + 10 лет
-        expiry = _safe_date_add_years(issue_date, 10)
-
-    # Коррекция: если дата уже в прошлом → прибавляем по 10 лет до будущего
-    today = date.today()
-    years_added = 0
-    while expiry < today:
-        expiry = _safe_date_add_years(expiry, 10)
-        years_added += 10
-
-    return expiry, years_added > 0, years_added
+    return {
+        "country": country,
+        "number": number,
+        "surname": surname,
+        "name": name,
+        "gender": gender,
+        "doc_type": doc_type,
+        "birth_date_long": format_date_long(data.birth_date),
+        "birth_date_short": format_date_short(data.birth_date),
+        "expiry_long": format_date_long(data.expiry_date),
+        "expiry_short": format_date_short(data.expiry_date),
+    }
 
 
 def format_passport_type1(data: PassportData) -> str:
-    """
-    Формат 1: country/number/country/birthdate/gender/expiry/surname/name
-    Пример: uz/fa2971721/uz/10aug05/m/06jun26/yafarov/amir
-
-    Args:
-        data: Данные паспорта
-
-    Returns:
-        Отформатированная строка
-    """
-    country = get_country_code(
-        data.birth_place, data.passport_number, data.surname, data.name)
-    number = (data.passport_number or "0000000000").replace(" ", "").lower()
-    birth_date = format_date_long(data.birth_date)
-    gender = get_gender_code(data.gender)
-    expiry_date, _, _ = calculate_expiry_date(
-        data.birth_date, data.issue_date, data.passport_number)
-    expiry = format_date_long(expiry_date)
-    surname = transliterate_to_latin(data.surname).lower()
-    name = transliterate_to_latin(data.name).lower()
-
-    return f"{country}/{number}/{country}/{birth_date}/{gender}/{expiry}/{surname}/{name}"
+    """Format passport data using template 1 from settings."""
+    variables = _build_format_vars(data)
+    return settings.format_type1.format(**variables)
 
 
 def format_passport_type2(data: PassportData) -> str:
-    """
-    Формат 2: -surname name birthdate+gender/country/doc_type number/expiry
-    Пример: -yafarov amir 100805+m/uz/NP fa2971721/060626
-
-    Args:
-        data: Данные паспорта
-
-    Returns:
-        Отформатированная строка
-    """
-    surname = transliterate_to_latin(data.surname).lower()
-    name = transliterate_to_latin(data.name).lower()
-    birth_date = format_date_short(data.birth_date)
-    gender = get_gender_code(data.gender)
-    country = get_country_code(
-        data.birth_place, data.passport_number, data.surname, data.name)
-    doc_type = get_document_type(data.passport_number)
-    number = (data.passport_number or "0000000000").replace(" ", "").lower()
-    expiry_date, _, _ = calculate_expiry_date(
-        data.birth_date, data.issue_date, data.passport_number)
-    expiry = format_date_short(expiry_date)
-
-    return f"-{surname} {name} {birth_date}+{gender}/{country}/{doc_type} {number}/{expiry}"
+    """Format passport data using template 2 from settings."""
+    variables = _build_format_vars(data)
+    return settings.format_type2.format(**variables)

@@ -8,15 +8,13 @@ class PassportData(BaseModel):
     """Extracted passport data."""
 
     passport_number: Optional[str] = None
-    issued_by: Optional[str] = None
-    issue_date: Optional[date] = None
-    subdivision_code: Optional[str] = None
     surname: Optional[str] = None
     name: Optional[str] = None
     middle_name: Optional[str] = None
     gender: Optional[str] = None
     birth_date: Optional[date] = None
     birth_place: Optional[str] = None
+    expiry_date: Optional[date] = None
 
     def count_filled_fields(self) -> int:
         """Count non-empty fields."""
