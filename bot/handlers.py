@@ -11,6 +11,7 @@ from db.database import get_db
 from db.repository import PassportRepository
 from ocr.provider import get_ocr_provider
 from ocr.hybrid import HybridRecognizer
+from ocr.openrouter import OpenRouterProvider
 from services import ImageProcessor, PdfProcessor, ExportService
 from bot.keyboards import get_export_keyboard
 from utils.logger import get_logger
@@ -247,11 +248,12 @@ _PROVIDER_LABELS = {
     'rupasportread': 'Tesseract MRZ',
     'easyocr': 'EasyOCR',
     'yandex_ocr': 'Yandex OCR',
+    'openrouter': 'OpenRouter LLM',
     'inferred': 'Из имени',
     'none': '-',
 }
 
-_PROVIDER_ORDER = ['rupasportread', 'easyocr', 'yandex_ocr']
+_PROVIDER_ORDER = ['rupasportread', 'easyocr', 'yandex_ocr', 'openrouter']
 
 _FIELD_LABELS = {
     'surname': 'Фамилия',
@@ -344,7 +346,11 @@ async def process_image(
 
         # Hybrid OCR recognition
         yandex_provider = get_ocr_provider()
-        recognizer = HybridRecognizer(yandex_provider=yandex_provider)
+        openrouter_provider = OpenRouterProvider() if settings.openrouter_api_key else None
+        recognizer = HybridRecognizer(
+            yandex_provider=yandex_provider,
+            openrouter_provider=openrouter_provider,
+        )
         hybrid_result = await recognizer.recognize(normalized_bytes, mime_type)
 
         passport_data = hybrid_result.passport_data
@@ -465,7 +471,11 @@ async def process_pdf(
 
                 # Hybrid OCR
                 yandex_provider = get_ocr_provider()
-                recognizer = HybridRecognizer(yandex_provider=yandex_provider)
+                openrouter_provider = OpenRouterProvider() if settings.openrouter_api_key else None
+                recognizer = HybridRecognizer(
+                    yandex_provider=yandex_provider,
+                    openrouter_provider=openrouter_provider,
+                )
                 hybrid_result = await recognizer.recognize(
                     normalized_bytes, mime_type
                 )

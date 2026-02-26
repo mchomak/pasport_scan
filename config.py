@@ -46,6 +46,16 @@ class Settings(BaseSettings):
         description="OCR language codes"
     )
 
+    # OpenRouter (vision LLM)
+    openrouter_api_key: str = Field(
+        default="",
+        description="OpenRouter API key (sk-or-...)"
+    )
+    openrouter_model: str = Field(
+        default="google/gemini-flash-1.5",
+        description="OpenRouter vision model to use"
+    )
+
     # OCR Limits
     ocr_max_file_mb: int = Field(
         default=10,

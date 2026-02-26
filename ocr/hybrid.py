@@ -62,10 +62,11 @@ class HybridResult:
 
 class HybridRecognizer:
     """
-    Hybrid passport recognizer with 3-tier priority:
+    Hybrid passport recognizer with 4-module pipeline:
       1) rupasportread  - Tesseract MRZ reader
       2) EasyOCR        - enhanced OCR with document detection
-      3) Yandex OCR     - cloud API (last resort)
+      3) Yandex OCR     - cloud API (last resort for missing fields)
+      4) OpenRouter     - vision LLM, always runs
     """
 
     ESSENTIAL_FIELDS = [
@@ -73,8 +74,9 @@ class HybridRecognizer:
         'birth_date', 'gender', 'issue_date',
     ]
 
-    def __init__(self, yandex_provider=None):
+    def __init__(self, yandex_provider=None, openrouter_provider=None):
         self.yandex_provider = yandex_provider
+        self.openrouter_provider = openrouter_provider
 
     # ------------------------------------------------------------------
     # Validation helpers
@@ -469,7 +471,7 @@ class HybridRecognizer:
                         len(image_bytes), mime_type)
 
         # ---- Priority 1: rupasportread (Tesseract MRZ) ----
-        logger.info("Hybrid: [1/3] rupasportread...")
+        logger.info("Hybrid: [1/4] rupasportread...")
         rpr_result = await asyncio.to_thread(
             self._run_rupasportread, image_bytes
         )
@@ -505,7 +507,7 @@ class HybridRecognizer:
 
         # ---- Priority 2: EasyOCR (if essential fields still missing) ----
         if self._count_essential(current_data) < len(self.ESSENTIAL_FIELDS):
-            logger.info("Hybrid: [2/3] EasyOCR...")
+            logger.info("Hybrid: [2/4] EasyOCR...")
             easyocr_data = await asyncio.to_thread(
                 self._run_easyocr, image_bytes
             )
@@ -545,7 +547,7 @@ class HybridRecognizer:
             self._count_essential(current_data) < len(self.ESSENTIAL_FIELDS)
             and self.yandex_provider
         ):
-            logger.info("Hybrid: [3/3] Yandex OCR...")
+            logger.info("Hybrid: [3/4] Yandex OCR...")
             try:
                 yandex_result = await self.yandex_provider.recognize_passport(
                     image_bytes, mime_type
@@ -600,6 +602,41 @@ class HybridRecognizer:
                 debug_log.debug("[yandex_ocr] SKIPPED — all essential fields filled")
             elif not self.yandex_provider:
                 debug_log.debug("[yandex_ocr] SKIPPED — no provider configured")
+
+        # ---- Module 4: OpenRouter vision LLM (always runs) ----
+        if self.openrouter_provider:
+            logger.info("Hybrid: [4/4] OpenRouter LLM...")
+            try:
+                or_result = await self.openrouter_provider.recognize_passport(
+                    image_bytes, mime_type
+                )
+                if or_result.success and or_result.passport_data:
+                    or_data = or_result.passport_data
+                    or_data = self._clean_passport_data(or_data)
+                    per_module_data["openrouter"] = or_data
+
+                    debug_log.debug("[openrouter] parsed=%s",
+                                   json.dumps(self._passport_data_to_debug_dict(or_data),
+                                              ensure_ascii=False))
+
+                    filled_before = self._get_filled_fields(current_data)
+                    current_data, supp_wins = self._merge(current_data, or_data)
+                    filled_after = self._get_filled_fields(current_data)
+                    new_fields = filled_after - filled_before
+                    for f in new_fields | supp_wins:
+                        field_providers[f] = "openrouter"
+                    modules_used.append("openrouter")
+                    raw_responses['openrouter'] = or_result.raw_response
+                    logger.info(
+                        "OpenRouter done",
+                        filled=current_data.count_filled_fields(),
+                        new_fields=list(new_fields),
+                    )
+            except Exception as e:
+                debug_log.debug("[openrouter] EXCEPTION: %s", e, exc_info=True)
+                logger.error("OpenRouter failed", error=str(e))
+        else:
+            debug_log.debug("[openrouter] SKIPPED — no provider configured")
 
         # ---- Post-processing: Yandex priority for passport_number ----
         if "yandex_ocr" in per_module_data:
