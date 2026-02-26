@@ -197,7 +197,7 @@ class HybridRecognizer:
     # ------------------------------------------------------------------
     def _run_rupasportread(self, image_bytes: bytes) -> Optional[dict]:
         try:
-            import rupasportread
+            import utils.rupasportread as rupasportread
             result = rupasportread.recognize_from_bytes(image_bytes)
             return result
         except Exception as e:

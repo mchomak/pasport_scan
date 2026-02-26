@@ -6,13 +6,19 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from config import settings
 from db.database import get_db
 from db.repository import PassportRepository
 from ocr.provider import get_ocr_provider
 from ocr.hybrid import HybridRecognizer
 from ocr.openrouter import OpenRouterProvider
-from services import ImageProcessor, PdfProcessor, ExportService
+from services.image_processor import ImageProcessor
+from services.pdf_processor import PdfProcessor
+from services.export_service import ExportService
 from bot.keyboards import get_export_keyboard
 from utils.logger import get_logger
 from utils.passport_formatter import (
@@ -112,9 +118,12 @@ async def handle_export_callback(callback: CallbackQuery):
 
     except Exception as e:
         logger.error("Export failed", error=str(e))
-        await callback.message.edit_text(
-            f"Ошибка при формировании выгрузки: {str(e)}"
-        )
+        try:
+            await callback.message.edit_text(
+                "Ошибка при формировании выгрузки."
+            )
+        except Exception:
+            pass
 
     await callback.answer()
 
@@ -160,10 +169,13 @@ async def handle_photo(message: Message, bot: Bot):
 
     except Exception as e:
         logger.error("Photo processing failed", error=str(e))
-        await status_msg.edit_text(
-            "Произошла ошибка при обработке фото. "
-            "Пожалуйста, попробуйте другое изображение."
-        )
+        try:
+            await status_msg.edit_text(
+                "Произошла ошибка при обработке фото. "
+                "Пожалуйста, попробуйте другое изображение."
+            )
+        except Exception:
+            pass
 
 
 # --- Document Handler ---
@@ -235,10 +247,13 @@ async def handle_document(message: Message, bot: Bot):
 
     except Exception as e:
         logger.error("Document processing failed", error=str(e))
-        await status_msg.edit_text(
-            "Произошла ошибка при обработке документа. "
-            "Пожалуйста, попробуйте другой файл."
-        )
+        try:
+            await status_msg.edit_text(
+                "Произошла ошибка при обработке документа. "
+                "Пожалуйста, попробуйте другой файл."
+            )
+        except Exception:
+            pass
 
 
 # --- Processing Functions ---
@@ -394,10 +409,13 @@ async def process_image(
 
     except Exception as e:
         logger.error("Image processing failed", error=str(e))
-        await status_msg.edit_text(
-            "Не удалось распознать паспорт. "
-            "Пожалуйста, попробуйте более чёткий снимок."
-        )
+        try:
+            await status_msg.edit_text(
+                "Не удалось распознать паспорт. "
+                "Пожалуйста, попробуйте более чёткий снимок."
+            )
+        except Exception:
+            pass
 
 
 async def process_pdf(
@@ -512,7 +530,10 @@ async def process_pdf(
 
     except Exception as e:
         logger.error("PDF processing failed", error=str(e))
-        await status_msg.edit_text(
-            "Не удалось обработать PDF. "
-            "Пожалуйста, попробуйте другой файл."
-        )
+        try:
+            await status_msg.edit_text(
+                "Не удалось обработать PDF. "
+                "Пожалуйста, попробуйте другой файл."
+            )
+        except Exception:
+            pass
