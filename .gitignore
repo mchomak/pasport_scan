@@ -46,6 +46,7 @@ tmp/*
 
 # Logs
 *.log
+logs/
 /data/
 # OS
 .DS_Store
