@@ -68,7 +68,7 @@ class Settings(BaseSettings):
 
     # OCR module priority (comma-separated, lower index = higher priority)
     ocr_module_priority: str = Field(
-        default="openrouter,yandex_ocr,rupasportread",
+        default="openrouter,yandex_ocr",
         description="OCR module priority, comma-separated list"
     )
 

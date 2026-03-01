@@ -15,12 +15,35 @@ services:
       timeout: 5s
       retries: 5
 
-  bot:
-    build: .
+  bot-light:
+    profiles: ["light"]
+    build:
+      context: .
+      args:
+        VARIANT: light
     env_file:
       - .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/passports
+      - OCR_MODULE_PRIORITY=openrouter,yandex_ocr
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./tmp:/app/tmp
+    restart: unless-stopped
+
+  bot-full:
+    profiles: ["full"]
+    build:
+      context: .
+      args:
+        VARIANT: full
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/passports
+      - OCR_MODULE_PRIORITY=openrouter,yandex_ocr,rupasportread
     depends_on:
       db:
         condition: service_healthy

@@ -53,18 +53,29 @@ OPENROUTER_API_KEY=sk-or-your-key-here
 
 ### 2. Запуск
 
+Проект доступен в двух вариантах:
+
+**Light** (OpenRouter + Yandex OCR, маленький образ, меньше ОЗУ):
+
 ```bash
-docker compose up -d
+docker compose --profile light up -d
 ```
 
-Эта команда поднимет PostgreSQL и бота. Миграции применяются автоматически при старте.
+**Full** (+ Tesseract MRZ, образ больше на ~65MB):
+
+```bash
+docker compose --profile full up -d
+```
 
 ```bash
 # Логи
-docker compose logs -f bot
+docker compose logs -f bot-light   # или bot-full
 
 # Остановка
-docker compose down
+docker compose --profile light down   # или --profile full
+
+# Пересборка после изменений
+docker compose --profile light up -d --build
 ```
 
 ### 3. Локальная разработка (без Docker)
@@ -73,6 +84,10 @@ docker compose down
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
+# Для full-варианта с Tesseract:
+# pip install -r requirements-full.txt
+# + установите tesseract-ocr: apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus
 
 # Запустите PostgreSQL и задайте DATABASE_URL в .env
 alembic upgrade head
@@ -93,7 +108,7 @@ python main.py
 
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
-| `OCR_MODULE_PRIORITY` | Приоритет модулей (через запятую) | `openrouter,yandex_ocr,rupasportread` |
+| `OCR_MODULE_PRIORITY` | Приоритет модулей (через запятую) | `openrouter,yandex_ocr` |
 | `OPENROUTER_API_KEY` | Ключ OpenRouter API | — |
 | `OPENROUTER_MODEL` | Модель для OpenRouter | `google/gemini-flash-1.5` |
 | `YC_FOLDER_ID` | Folder ID Yandex Cloud | — |

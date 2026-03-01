@@ -1,0 +1,4 @@
+# Extra dependencies for "full" variant (Tesseract MRZ + OpenCV)
+opencv-python-headless==4.9.0.80
+pytesseract==0.3.10
+imutils==0.5.4

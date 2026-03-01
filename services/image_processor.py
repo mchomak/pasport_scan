@@ -2,8 +2,6 @@
 import io
 from typing import Literal
 from PIL import Image, ImageOps
-import cv2
-import numpy as np
 from config import settings
 from utils.logger import get_logger
 
@@ -127,6 +125,9 @@ class ImageProcessor:
             Enhanced image bytes
         """
         try:
+            import cv2
+            import numpy as np
+
             # Convert to numpy array
             nparr = np.frombuffer(image_bytes, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
