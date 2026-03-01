@@ -398,6 +398,7 @@ async def process_image(
 
             response_text = (
                 f"<code>{format1}</code>\n"
+                "\n"
                 f"<code>{format2}</code>\n"
                 f"<blockquote expandable>"
                 f"{details}"
