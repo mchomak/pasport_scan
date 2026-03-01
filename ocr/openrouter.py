@@ -70,8 +70,8 @@ class OpenRouterProvider:
     def _apply_uz_passport_number_rule(passport_number: Optional[str]) -> Optional[str]:
         """
         Apply Uzbekistan passport number heuristic:
-        expected format is 2 letters + 9 digits.
-        If model returns 2 letters + 10 digits (extra MRZ check digit), trim last digit.
+        expected format is 2 letters + 7 digits.
+        If model returns 2 letters + 8 digits (extra MRZ check digit), trim last digit.
         """
         if not passport_number:
             return None
@@ -87,11 +87,12 @@ class OpenRouterProvider:
         series, digits = m.groups()
 
         # Expected: 9 digits
-        if len(digits) == 9:
+        if len(digits) == 7:
             return f"{series}{digits}"
 
-        # Common MRZ issue: extra check digit appended -> 10 digits
-        if len(digits) == 10:
+        # Common MRZ issue: extra check digit appended -> 8 digits
+        logger.info("digits", digits)
+        if len(digits) == 8:
             fixed = f"{series}{digits[:-1]}"
             logger.info(
                 "OpenRouter: applied UZ passport heuristic (trim extra digit)",
