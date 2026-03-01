@@ -91,7 +91,6 @@ class OpenRouterProvider:
             return f"{series}{digits}"
 
         # Common MRZ issue: extra check digit appended -> 8 digits
-        logger.info("digits", digits)
         if len(digits) == 8:
             fixed = f"{series}{digits[:-1]}"
             logger.info(
@@ -248,16 +247,20 @@ class OpenRouterProvider:
             logger.warning("OpenRouter: could not parse JSON", content=content[:300])
             return PassportData()
 
-        return PassportData(
-            surname=self._get_str(data, "surname"),
-            name=self._get_str(data, "name"),
-            middle_name=self._get_str(data, "middle_name"),
-            passport_number=self._normalize_passport_number(data),
-            birth_date=self._parse_date(self._get_str(data, "birth_date")),
-            expiry_date=self._parse_date(self._get_str(data, "expiry_date")),
-            gender=self._get_str(data, "gender"),
-            birth_place=self._get_str(data, "birth_place"),
-        )
+        try:
+            return PassportData(
+                surname=self._get_str(data, "surname"),
+                name=self._get_str(data, "name"),
+                middle_name=self._get_str(data, "middle_name"),
+                passport_number=self._normalize_passport_number(data),
+                birth_date=self._parse_date(self._get_str(data, "birth_date")),
+                expiry_date=self._parse_date(self._get_str(data, "expiry_date")),
+                gender=self._get_str(data, "gender"),
+                birth_place=self._get_str(data, "birth_place"),
+            )
+        except Exception:
+            logger.exception("OpenRouter: failed to build PassportData")
+            return PassportData()
 
     async def recognize_passport(
         self,
