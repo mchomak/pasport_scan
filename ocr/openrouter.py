@@ -195,7 +195,7 @@ class OpenRouterProvider:
                 mrz_check_digit = mrz_check_digit[-1]
 
         if source not in {"mrz", "mixed"}:
-            return passport_number
+            return self._apply_uz_passport_number_rule(passport_number)
 
         original = passport_number
         normalized = passport_number
