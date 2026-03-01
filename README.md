@@ -30,19 +30,30 @@ pasport_scan/
 └── requirements.txt
 ```
 
-## Быстрый старт (Docker)
+## Быстрый старт
 
-### 1. Настройка
+### 1. PostgreSQL
+
+Бот использует локальную PostgreSQL. Создайте базу данных:
+
+```bash
+createdb passports
+```
+
+### 2. Настройка
 
 ```bash
 cp .env.example .env
 ```
 
-Заполните обязательные параметры в `.env`:
+Заполните параметры в `.env`:
 
 ```env
 BOT_TOKEN=your_telegram_bot_token
 ADMIN_IDS=123456789
+
+# Подключение к локальной PostgreSQL
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/passports
 
 YC_FOLDER_ID=your_yandex_cloud_folder_id
 YC_IAM_TOKEN=your_yandex_iam_token
@@ -51,7 +62,7 @@ YC_IAM_TOKEN=your_yandex_iam_token
 OPENROUTER_API_KEY=sk-or-your-key-here
 ```
 
-### 2. Запуск
+### 3. Запуск (Docker)
 
 Проект доступен в двух вариантах:
 
@@ -67,6 +78,8 @@ docker compose --profile light up -d
 docker compose --profile full up -d
 ```
 
+Контейнер подключается к локальной PostgreSQL через `network_mode: host`.
+
 ```bash
 # Логи
 docker compose logs -f bot-light   # или bot-full
@@ -78,7 +91,7 @@ docker compose --profile light down   # или --profile full
 docker compose --profile light up -d --build
 ```
 
-### 3. Локальная разработка (без Docker)
+### 4. Запуск без Docker
 
 ```bash
 python -m venv venv
@@ -89,7 +102,6 @@ pip install -r requirements.txt
 # pip install -r requirements-full.txt
 # + установите tesseract-ocr: apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus
 
-# Запустите PostgreSQL и задайте DATABASE_URL в .env
 alembic upgrade head
 python main.py
 ```
