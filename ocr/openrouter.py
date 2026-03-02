@@ -86,21 +86,21 @@ class OpenRouterProvider:
 
         series, digits = m.groups()
 
-        # Expected: 9 digits
+        # Expected format: 2 letters + exactly 7 digits
         if len(digits) == 7:
             return f"{series}{digits}"
 
-        # Common MRZ issue: extra check digit appended -> 8 digits
-        if len(digits) == 8:
-            fixed = f"{series}{digits[:-1]}"
+        # More than 7 digits — trim to first 7 (extra MRZ check digit(s))
+        if len(digits) > 7:
+            fixed = f"{series}{digits[:7]}"
             logger.info(
-                "OpenRouter: applied UZ passport heuristic (trim extra digit)",
+                "OpenRouter: applied UZ passport heuristic (trim to 7 digits)",
                 before=value,
                 after=fixed,
             )
             return fixed
 
-        # Any other length: keep as is, but you may log for QA
+        # Fewer than 7 digits: keep as-is
         logger.warning(
             "OpenRouter: unexpected UZ passport number length",
             value=value,

@@ -18,8 +18,6 @@ class YandexOcrProvider(OcrProvider):
 
     def __init__(self):
         self.endpoint = settings.yc_ocr_endpoint
-        self.folder_id = settings.yc_folder_id
-        self.iam_token = settings.yc_iam_token
         self.rate_limiter = RateLimiter(rate=settings.ocr_rate_limit_rps)
         self.client = httpx.AsyncClient(timeout=30.0)
 
@@ -30,11 +28,11 @@ class YandexOcrProvider(OcrProvider):
         await self.client.aclose()
 
     def _get_headers(self) -> dict[str, str]:
-        """Get authentication headers - copied from ocr_test.py"""
+        """Get authentication headers — always reads current token from settings."""
         return {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.iam_token}",
-            "x-folder-id": self.folder_id
+            "Authorization": f"Bearer {settings.yc_iam_token}",
+            "x-folder-id": settings.yc_folder_id,
         }
 
     def _parse_date(self, date_str: Optional[str]) -> Optional[datetime.date]:

@@ -49,13 +49,38 @@ async def main():
     # Initialize database (with retries for Docker startup order)
     await _init_database()
 
-    # Check OCR provider
-    try:
-        from ocr.provider import get_ocr_provider
-        ocr_provider = get_ocr_provider()
-        logger.info("OCR provider initialized", provider=settings.ocr_provider_model)
-    except Exception as e:
-        logger.error("Failed to initialize OCR provider", error=str(e))
+    # Check OCR providers based on module priority
+    priority = settings.get_module_priority()
+    logger.info("OCR module priority", modules=priority)
+
+    if "yandex_ocr" in priority:
+        # Auto-refresh IAM token before checking the provider
+        from utils.iam_refresher import refresh_iam_token, start_iam_refresh_loop
+
+        token = await refresh_iam_token()
+        if token:
+            settings.yc_iam_token = token
+
+        if not settings.yc_iam_token or not settings.yc_folder_id:
+            logger.error(
+                "yandex_ocr is in priority but YC_IAM_TOKEN/YC_FOLDER_ID are not set "
+                "and auto-refresh failed. Set YC_OAUTH_TOKEN or YC_IAM_TOKEN in .env"
+            )
+            sys.exit(1)
+
+        try:
+            from ocr.provider import get_ocr_provider
+            get_ocr_provider()
+            logger.info("Yandex OCR provider initialized")
+        except Exception as e:
+            logger.error("Failed to initialize Yandex OCR provider", error=str(e))
+            sys.exit(1)
+
+        # Start background IAM token refresh (every 12 hours)
+        asyncio.create_task(start_iam_refresh_loop())
+
+    if "openrouter" in priority and not settings.openrouter_api_key:
+        logger.error("OpenRouter is in priority but OPENROUTER_API_KEY is not set")
         sys.exit(1)
 
     # Initialize bot and dispatcher

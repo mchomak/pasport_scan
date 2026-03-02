@@ -340,9 +340,10 @@ async def process_image(
         processor = ImageProcessor()
         normalized_bytes, mime_type = processor.normalize_image(image_bytes)
 
-        # Hybrid OCR recognition
-        yandex_provider = get_ocr_provider()
-        openrouter_provider = OpenRouterProvider() if settings.openrouter_api_key else None
+        # Hybrid OCR recognition — only create providers that are in priority
+        priority = settings.get_module_priority()
+        yandex_provider = get_ocr_provider() if "yandex_ocr" in priority else None
+        openrouter_provider = OpenRouterProvider() if "openrouter" in priority and settings.openrouter_api_key else None
         recognizer = HybridRecognizer(
             yandex_provider=yandex_provider,
             openrouter_provider=openrouter_provider,
@@ -430,6 +431,8 @@ async def process_pdf(
 ):
     """Process PDF document page by page."""
     try:
+        priority = settings.get_module_priority()
+
         # Extract pages as images
         pdf_processor = PdfProcessor()
         pages = pdf_processor.extract_pages_as_images(pdf_bytes)
@@ -451,9 +454,9 @@ async def process_pdf(
                 processor = ImageProcessor()
                 normalized_bytes, mime_type = processor.normalize_image(image_bytes)
 
-                # Hybrid OCR
-                yandex_provider = get_ocr_provider()
-                openrouter_provider = OpenRouterProvider() if settings.openrouter_api_key else None
+                # Hybrid OCR — only create providers that are in priority
+                yandex_provider = get_ocr_provider() if "yandex_ocr" in priority else None
+                openrouter_provider = OpenRouterProvider() if "openrouter" in priority and settings.openrouter_api_key else None
                 recognizer = HybridRecognizer(
                     yandex_provider=yandex_provider,
                     openrouter_provider=openrouter_provider,
