@@ -31,8 +31,9 @@ class Settings(BaseSettings):
     )
 
     # Yandex Cloud OCR
-    yc_folder_id: str = Field(..., description="Yandex Cloud folder ID")
-    yc_iam_token: str = Field(..., description="Yandex Cloud IAM token")
+    yc_folder_id: str = Field(default="", description="Yandex Cloud folder ID")
+    yc_iam_token: str = Field(default="", description="Yandex Cloud IAM token")
+    yc_oauth_token: str = Field(default="", description="Yandex Cloud OAuth token for automatic IAM refresh")
     yc_ocr_endpoint: str = Field(
         default="https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText",
         description="Yandex OCR API endpoint"
