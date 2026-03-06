@@ -54,31 +54,45 @@ async def main():
     logger.info("OCR module priority", modules=priority)
 
     if "yandex_ocr" in priority:
-        # Auto-refresh IAM token before checking the provider
-        from utils.iam_refresher import refresh_iam_token, start_iam_refresh_loop
-
-        token = await refresh_iam_token()
-        if token:
-            settings.yc_iam_token = token
-        elif settings.yc_oauth_token:
-            # OAuth token is set but exchange failed — this is a hard error
-            logger.error(
-                "YC_OAUTH_TOKEN is set but IAM token exchange failed. "
-                "Check the OAuth token value and network connectivity."
-            )
+        if not settings.yc_folder_id:
+            logger.error("yandex_ocr is in priority but YC_FOLDER_ID is not set")
             sys.exit(1)
 
-        if not settings.yc_iam_token or not settings.yc_folder_id:
-            logger.error(
-                "yandex_ocr is in priority but YC_IAM_TOKEN/YC_FOLDER_ID are not set "
-                "and auto-refresh failed. Set YC_OAUTH_TOKEN or YC_IAM_TOKEN in .env"
+        if settings.yc_api_key:
+            # Api-Key auth — no refresh needed, key never expires
+            logger.info(
+                "Yandex OCR: using Api-Key auth (permanent)",
+                key_preview=settings.yc_api_key[:8] + "***",
             )
-            sys.exit(1)
+        else:
+            # IAM token auth — needs refresh
+            from utils.iam_refresher import refresh_iam_token, start_iam_refresh_loop
 
-        logger.info(
-            "Yandex OCR: using IAM token",
-            token_preview=settings.yc_iam_token[:8] + "***" if settings.yc_iam_token else "EMPTY",
-        )
+            token = await refresh_iam_token()
+            if token:
+                settings.yc_iam_token = token
+            elif settings.yc_oauth_token:
+                logger.error(
+                    "YC_OAUTH_TOKEN is set but IAM token exchange failed. "
+                    "Check the OAuth token value and network connectivity. "
+                    "Consider using YC_API_KEY instead (does not expire)."
+                )
+                sys.exit(1)
+
+            if not settings.yc_iam_token:
+                logger.error(
+                    "yandex_ocr needs auth credentials. Set one of:\n"
+                    "  YC_API_KEY     — permanent API key (recommended)\n"
+                    "  YC_OAUTH_TOKEN — auto-refresh via OAuth\n"
+                    "  YC_IAM_TOKEN   — manual IAM token (expires in 12h)"
+                )
+                sys.exit(1)
+
+            logger.info(
+                "Yandex OCR: using IAM Bearer token",
+                token_preview=settings.yc_iam_token[:8] + "***",
+            )
+            asyncio.create_task(start_iam_refresh_loop())
 
         try:
             from ocr.provider import get_ocr_provider
@@ -87,9 +101,6 @@ async def main():
         except Exception as e:
             logger.error("Failed to initialize Yandex OCR provider", error=str(e))
             sys.exit(1)
-
-        # Start background IAM token refresh (every 12 hours)
-        asyncio.create_task(start_iam_refresh_loop())
 
     if "openrouter" in priority and not settings.openrouter_api_key:
         logger.error("OpenRouter is in priority but OPENROUTER_API_KEY is not set")

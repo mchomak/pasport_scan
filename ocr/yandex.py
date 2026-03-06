@@ -28,12 +28,21 @@ class YandexOcrProvider(OcrProvider):
         await self.client.aclose()
 
     def _get_headers(self) -> dict[str, str]:
-        """Get authentication headers — always reads current token from settings."""
-        return {
+        """Get authentication headers.
+
+        Priority: Api-Key (permanent) > Bearer IAM token (expires).
+        """
+        if settings.yc_api_key:
+            auth = f"Api-Key {settings.yc_api_key}"
+        else:
+            auth = f"Bearer {settings.yc_iam_token}"
+
+        headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.yc_iam_token}",
+            "Authorization": auth,
             "x-folder-id": settings.yc_folder_id,
         }
+        return headers
 
     def _parse_date(self, date_str: Optional[str]) -> Optional[datetime.date]:
         """Parse date from various formats."""
@@ -160,13 +169,15 @@ class YandexOcrProvider(OcrProvider):
     ) -> OcrResult:
         """Recognize passport from image bytes."""
         try:
-            iam_token = settings.yc_iam_token
-            token_preview = (iam_token[:8] + "***") if iam_token else "EMPTY"
+            auth_type = "Api-Key" if settings.yc_api_key else "Bearer"
+            cred = settings.yc_api_key or settings.yc_iam_token
+            cred_preview = (cred[:8] + "***") if cred else "EMPTY"
             logger.info(
                 "Starting OCR recognition",
                 mime_type=mime_type,
                 size_bytes=len(image_bytes),
-                iam_token_preview=token_preview,
+                auth_type=auth_type,
+                credential_preview=cred_preview,
             )
 
             response_data = await self._make_request(image_bytes, mime_type)
