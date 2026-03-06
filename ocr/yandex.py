@@ -160,7 +160,14 @@ class YandexOcrProvider(OcrProvider):
     ) -> OcrResult:
         """Recognize passport from image bytes."""
         try:
-            logger.info("Starting OCR recognition", mime_type=mime_type, size_bytes=len(image_bytes))
+            iam_token = settings.yc_iam_token
+            token_preview = (iam_token[:8] + "***") if iam_token else "EMPTY"
+            logger.info(
+                "Starting OCR recognition",
+                mime_type=mime_type,
+                size_bytes=len(image_bytes),
+                iam_token_preview=token_preview,
+            )
 
             response_data = await self._make_request(image_bytes, mime_type)
 

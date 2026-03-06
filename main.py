@@ -60,6 +60,13 @@ async def main():
         token = await refresh_iam_token()
         if token:
             settings.yc_iam_token = token
+        elif settings.yc_oauth_token:
+            # OAuth token is set but exchange failed — this is a hard error
+            logger.error(
+                "YC_OAUTH_TOKEN is set but IAM token exchange failed. "
+                "Check the OAuth token value and network connectivity."
+            )
+            sys.exit(1)
 
         if not settings.yc_iam_token or not settings.yc_folder_id:
             logger.error(
@@ -67,6 +74,11 @@ async def main():
                 "and auto-refresh failed. Set YC_OAUTH_TOKEN or YC_IAM_TOKEN in .env"
             )
             sys.exit(1)
+
+        logger.info(
+            "Yandex OCR: using IAM token",
+            token_preview=settings.yc_iam_token[:8] + "***" if settings.yc_iam_token else "EMPTY",
+        )
 
         try:
             from ocr.provider import get_ocr_provider
