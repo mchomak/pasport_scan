@@ -312,6 +312,43 @@ class OpenRouterProvider:
             response = await self.client.post(
                 self.endpoint, json=payload, headers=headers
             )
+
+            # --- Handle 429 explicitly ---
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                rate_limit_reset = response.headers.get("X-RateLimit-Reset")
+                rate_limit_remaining = response.headers.get("X-RateLimit-Remaining")
+                rate_limit_limit = response.headers.get("X-RateLimit-Limit")
+                body_text = response.text[:500]
+
+                logger.error(
+                    "OpenRouter: 429 Too Many Requests",
+                    retry_after=retry_after,
+                    ratelimit_limit=rate_limit_limit,
+                    ratelimit_remaining=rate_limit_remaining,
+                    ratelimit_reset=rate_limit_reset,
+                    response_body=body_text,
+                    all_headers=dict(response.headers),
+                )
+
+                if retry_after:
+                    error_msg = f"OpenRouter rate limit (429). Retry-After: {retry_after}s"
+                else:
+                    error_msg = "OpenRouter rate limit (429). No Retry-After header."
+
+                return OcrResult(
+                    passport_data=PassportData(),
+                    raw_response={
+                        "error": error_msg,
+                        "status_code": 429,
+                        "retry_after": retry_after,
+                        "headers": dict(response.headers),
+                        "body": body_text,
+                    },
+                    success=False,
+                    error=error_msg,
+                )
+
             response.raise_for_status()
             resp_json = response.json()
 
@@ -332,6 +369,28 @@ class OpenRouterProvider:
                 passport_data=passport_data,
                 raw_response={"response": resp_json, "content": content},
                 success=True,
+            )
+
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code
+            body_text = e.response.text[:500]
+            resp_headers = dict(e.response.headers)
+            logger.error(
+                "OpenRouter HTTP error",
+                status_code=status_code,
+                response_body=body_text,
+                headers=resp_headers,
+            )
+            return OcrResult(
+                passport_data=PassportData(),
+                raw_response={
+                    "error": str(e),
+                    "status_code": status_code,
+                    "body": body_text,
+                    "headers": resp_headers,
+                },
+                success=False,
+                error=f"OpenRouter HTTP {status_code}: {body_text[:200]}",
             )
 
         except Exception as e:
