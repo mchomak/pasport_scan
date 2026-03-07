@@ -21,6 +21,7 @@ from services.pdf_processor import PdfProcessor
 from services.export_service import ExportService
 from bot.keyboards import get_export_keyboard
 from utils.logger import get_logger
+from utils.rate_limiter import MinuteRateLimiter
 from utils.passport_formatter import (
     format_passport_type1,
     format_passport_type2,
@@ -29,6 +30,9 @@ from utils.passport_formatter import (
 
 logger = get_logger(__name__)
 router = Router()
+
+# Global OpenRouter rate limiter (shared across all users)
+_openrouter_limiter = MinuteRateLimiter(rpm=settings.openrouter_rpm)
 
 
 # --- Command Handlers ---
@@ -258,6 +262,28 @@ async def handle_document(message: Message, bot: Bot):
 
 # --- Processing Functions ---
 
+async def _acquire_rate_limit(status_msg: Message) -> None:
+    """Acquire an OpenRouter rate-limit slot; notify user if waiting."""
+    if not _openrouter_limiter.is_enabled:
+        return
+
+    remaining = _openrouter_limiter.remaining()
+    if remaining <= 0:
+        wait_secs = _openrouter_limiter.seconds_until_free()
+        wait_secs_display = max(int(wait_secs), 1)
+        try:
+            await status_msg.edit_text(
+                f"Минутный лимит запросов исчерпан. "
+                f"Ожидайте ~{wait_secs_display} сек., результат придёт автоматически."
+            )
+        except Exception:
+            pass
+
+    waited = await _openrouter_limiter.acquire()
+    if waited > 0:
+        logger.info("Rate limiter: waited %.1f s before processing", waited)
+
+
 _PROVIDER_LABELS = {
     'rupasportread': 'Tesseract MRZ',
     'yandex_ocr': 'Yandex OCR',
@@ -336,6 +362,10 @@ async def process_image(
 ):
     """Process a single image through the hybrid OCR pipeline."""
     try:
+        # Acquire rate-limit slot (may wait and notify user)
+        if "openrouter" in settings.get_module_priority() and settings.openrouter_api_key:
+            await _acquire_rate_limit(status_msg)
+
         # Normalize image
         processor = ImageProcessor()
         normalized_bytes, mime_type = processor.normalize_image(image_bytes)
@@ -450,6 +480,10 @@ async def process_pdf(
             )
 
             try:
+                # Acquire rate-limit slot (may wait and notify user)
+                if "openrouter" in priority and settings.openrouter_api_key:
+                    await _acquire_rate_limit(page_status)
+
                 # Normalize image
                 processor = ImageProcessor()
                 normalized_bytes, mime_type = processor.normalize_image(image_bytes)

@@ -57,6 +57,10 @@ class Settings(BaseSettings):
         default="google/gemini-flash-1.5",
         description="OpenRouter vision model to use"
     )
+    openrouter_rpm: int = Field(
+        default=0,
+        description="OpenRouter rate limit: max requests per minute (0 = unlimited)"
+    )
 
     # Output format templates
     format_type1: str = Field(
