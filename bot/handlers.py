@@ -267,21 +267,23 @@ async def _acquire_rate_limit(status_msg: Message) -> None:
     if not _openrouter_limiter.is_enabled:
         return
 
-    remaining = _openrouter_limiter.remaining()
-    if remaining <= 0:
-        wait_secs = _openrouter_limiter.seconds_until_free()
-        wait_secs_display = max(int(wait_secs), 1)
+    async def _notify_wait(wait_seconds: float) -> None:
+        wait_display = max(int(wait_seconds), 1)
         try:
             await status_msg.edit_text(
                 f"Минутный лимит запросов исчерпан. "
-                f"Ожидайте ~{wait_secs_display} сек., результат придёт автоматически."
+                f"Ожидайте ~{wait_display} сек., результат придёт автоматически."
             )
         except Exception:
             pass
 
-    waited = await _openrouter_limiter.acquire()
+    waited = await _openrouter_limiter.acquire(notify_wait=_notify_wait)
     if waited > 0:
         logger.info("Rate limiter: waited %.1f s before processing", waited)
+        try:
+            await status_msg.edit_text("Обрабатываю...")
+        except Exception:
+            pass
 
 
 _PROVIDER_LABELS = {
