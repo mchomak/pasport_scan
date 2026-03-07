@@ -11,6 +11,13 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./tmp:/app/tmp
+      - ./bot:/app/bot
+      - ./ocr:/app/ocr
+      - ./utils:/app/utils
+      - ./services:/app/services
+      - ./db:/app/db
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
     restart: unless-stopped
 
   bot-full:
@@ -25,4 +32,11 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./tmp:/app/tmp
+      - ./bot:/app/bot
+      - ./ocr:/app/ocr
+      - ./utils:/app/utils
+      - ./services:/app/services
+      - ./db:/app/db
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
     restart: unless-stopped
