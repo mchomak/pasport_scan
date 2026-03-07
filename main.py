@@ -9,13 +9,14 @@ from aiogram.enums import ParseMode
 from aiogram.types import ErrorEvent
 
 from config import settings
-from db.database import init_db, create_tables, close_db
-from bot.handlers import router
 from utils.logger import setup_logger, get_logger
 
-# Setup logging
+# Setup logging BEFORE importing handlers (they create objects that log at import time)
 setup_logger(settings.log_level)
 logger = get_logger(__name__)
+
+from db.database import init_db, create_tables, close_db
+from bot.handlers import router
 
 DB_INIT_RETRIES = 5
 DB_INIT_DELAY = 3  # seconds
@@ -102,9 +103,15 @@ async def main():
             logger.error("Failed to initialize Yandex OCR provider", error=str(e))
             sys.exit(1)
 
-    if "openrouter" in priority and not settings.openrouter_api_key:
-        logger.error("OpenRouter is in priority but OPENROUTER_API_KEY is not set")
-        sys.exit(1)
+    if "openrouter" in priority:
+        if not settings.openrouter_api_key:
+            logger.error("OpenRouter is in priority but OPENROUTER_API_KEY is not set")
+            sys.exit(1)
+        logger.info(
+            "OpenRouter configured",
+            model=settings.openrouter_model,
+            rpm_limit=settings.openrouter_rpm or "unlimited",
+        )
 
     # Initialize bot and dispatcher
     bot = Bot(
