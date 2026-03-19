@@ -60,6 +60,8 @@ class MinuteRateLimiter:
         self._rpm = rpm
         self._timestamps: deque[float] = deque()
         self._lock = asyncio.Lock()
+        # print() works even before structlog is configured
+        print(f"[rate_limiter] MinuteRateLimiter created: rpm={rpm}, enabled={rpm > 0}", flush=True)
         logger.info("MinuteRateLimiter created", rpm=rpm)
 
     @property
