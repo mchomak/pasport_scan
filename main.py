@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import ErrorEvent
+import uvicorn
 
 from config import settings
 from utils.logger import setup_logger, get_logger
@@ -17,6 +18,7 @@ logger = get_logger(__name__)
 
 from db.database import init_db, create_tables, close_db
 from bot.handlers import router
+from web.app import app as web_app
 
 DB_INIT_RETRIES = 5
 DB_INIT_DELAY = 3  # seconds
@@ -135,6 +137,18 @@ async def main():
 
     logger.info("Bot configured, starting polling")
 
+    # Start web server in background
+    web_port = int(settings.web_port) if hasattr(settings, 'web_port') else 8080
+    web_config = uvicorn.Config(
+        web_app,
+        host="0.0.0.0",
+        port=web_port,
+        log_level="info",
+    )
+    web_server = uvicorn.Server(web_config)
+    web_task = asyncio.create_task(web_server.serve())
+    logger.info("Web server starting", port=web_port)
+
     try:
         await dp.start_polling(bot)
     except KeyboardInterrupt:
@@ -142,9 +156,11 @@ async def main():
     except Exception as e:
         logger.error("Bot polling error", error=str(e))
     finally:
+        web_server.should_exit = True
+        await web_task
         await bot.session.close()
         await close_db()
-        logger.info("Bot shutdown complete")
+        logger.info("Shutdown complete")
 
 
 if __name__ == "__main__":

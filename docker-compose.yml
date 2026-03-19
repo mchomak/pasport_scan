@@ -1,22 +1,4 @@
 services:
-  postgres:
-    image: postgres:16
-    container_name: pasport_scans_postgres
-    env_file:
-      - .env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   bot-light:
     profiles: ["light"]
     build:
@@ -25,11 +7,20 @@ services:
         VARIANT: light
     env_file:
       - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./tmp:/app/tmp
+      - ./bot:/app/bot
+      - ./ocr:/app/ocr
+      - ./utils:/app/utils
+      - ./services:/app/services
+      - ./db:/app/db
+      - ./web:/app/web
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
     restart: unless-stopped
 
   bot-full:
@@ -40,12 +31,18 @@ services:
         VARIANT: full
     env_file:
       - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./tmp:/app/tmp
+      - ./bot:/app/bot
+      - ./ocr:/app/ocr
+      - ./utils:/app/utils
+      - ./services:/app/services
+      - ./db:/app/db
+      - ./web:/app/web
+      - ./config.py:/app/config.py
+      - ./main.py:/app/main.py
     restart: unless-stopped
-
-volumes:
-  postgres_data:

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Passport OCR</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e0e0e6;
+    --muted: #8b8fa3;
+    --accent: #6c5ce7;
+    --accent-hover: #7c6ef7;
+    --success: #2ed573;
+    --error: #ff4757;
+    --field-bg: #22253a;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .header {
+    padding: 24px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header .badge {
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .container { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
+
+  /* Upload zone */
+  .upload-zone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 48px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 24px;
+    position: relative;
+  }
+  .upload-zone:hover, .upload-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(108,92,231,0.05);
+  }
+  .upload-zone .icon { font-size: 48px; margin-bottom: 12px; color: var(--muted); }
+  .upload-zone p { color: var(--muted); margin-bottom: 8px; }
+  .upload-zone .formats { font-size: 12px; color: var(--muted); }
+  .upload-zone input { display: none; }
+  .upload-zone .btn {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 10px 24px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.2s;
+  }
+  .upload-zone .btn:hover { background: var(--accent-hover); }
+
+  /* Progress */
+  .progress-bar {
+    display: none;
+    margin-bottom: 24px;
+    background: var(--card);
+    border-radius: 8px;
+    padding: 16px 20px;
+    border: 1px solid var(--border);
+  }
+  .progress-bar .track {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+  .progress-bar .fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.3s;
+    width: 0%;
+  }
+  .progress-bar .status { font-size: 13px; color: var(--muted); }
+
+  /* Two-column layout */
+  .results-grid {
+    display: none;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 32px;
+  }
+  @media (max-width: 900px) {
+    .results-grid { grid-template-columns: 1fr; }
+  }
+
+  /* Compact results (right pane) */
+  .compact-pane {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .compact-pane h2 { font-size: 14px; color: var(--muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .compact-pane .copy-btn {
+    float: right;
+    background: var(--field-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s;
+  }
+  .compact-pane .copy-btn:hover { border-color: var(--accent); }
+  .compact-result {
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text);
+  }
+  .compact-entry { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .compact-entry:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+
+  /* File queue (left pane) */
+  .queue-pane {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .queue-pane h2 { font-size: 14px; color: var(--muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .queue-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .queue-item:last-child { border-bottom: none; }
+  .queue-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .queue-item .status-icon { width: 20px; text-align: center; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Detail cards below */
+  .details-section { display: none; }
+  .details-section h2 {
+    font-size: 14px;
+    color: var(--muted);
+    margin-bottom: 16px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .detail-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .detail-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .detail-body { display: flex; gap: 0; }
+  @media (max-width: 900px) { .detail-body { flex-direction: column; } }
+  .detail-thumb {
+    width: 280px;
+    min-width: 280px;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid var(--border);
+  }
+  .detail-thumb img { max-width: 100%; max-height: 360px; object-fit: contain; }
+  .detail-info { flex: 1; padding: 16px 20px; }
+  .detail-formats {
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 13px;
+    background: var(--field-bg);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .detail-module {
+    margin-bottom: 12px;
+  }
+  .detail-module-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .detail-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 13px; }
+  .detail-field { display: flex; gap: 8px; padding: 2px 0; }
+  .detail-field .lbl { color: var(--muted); min-width: 110px; }
+  .detail-field .val { color: var(--text); }
+  .detail-field .val.empty { color: var(--muted); font-style: italic; }
+  .detail-field .val .src { color: var(--muted); font-size: 11px; }
+  .detail-skipped { font-size: 12px; color: var(--muted); margin-top: 8px; font-style: italic; }
+
+  .error-text { color: var(--error); font-size: 13px; padding: 16px 20px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Passport OCR</h1>
+  <span class="badge">Web</span>
+</div>
+
+<div class="container">
+  <div class="upload-zone" id="dropZone">
+    <div class="icon">&#128196;</div>
+    <p>Перетащите файлы сюда</p>
+    <p class="formats">JPEG, PNG, PDF</p>
+    <button class="btn" id="selectBtn">Выбрать файлы</button>
+    <input type="file" id="fileInput" multiple accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf">
+  </div>
+
+  <div class="progress-bar" id="progressBar">
+    <span class="status" id="progressStatus">Обработка...</span>
+    <div class="track"><div class="fill" id="progressFill"></div></div>
+  </div>
+
+  <div class="results-grid" id="resultsGrid">
+    <div class="queue-pane" id="queuePane">
+      <h2>Файлы</h2>
+      <div id="queueList"></div>
+    </div>
+    <div class="compact-pane">
+      <button class="copy-btn" id="copyBtn" title="Копировать все">Копировать</button>
+      <h2>Результат</h2>
+      <div id="compactResults"></div>
+    </div>
+  </div>
+
+  <div class="details-section" id="detailsSection">
+    <h2>Подробности</h2>
+    <div id="detailCards"></div>
+  </div>
+</div>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const selectBtn = document.getElementById('selectBtn');
+const progressBar = document.getElementById('progressBar');
+const progressFill = document.getElementById('progressFill');
+const progressStatus = document.getElementById('progressStatus');
+const resultsGrid = document.getElementById('resultsGrid');
+const queueList = document.getElementById('queueList');
+const compactResults = document.getElementById('compactResults');
+const detailsSection = document.getElementById('detailsSection');
+const detailCards = document.getElementById('detailCards');
+const copyBtn = document.getElementById('copyBtn');
+
+// Drag & drop
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) processFiles(e.dataTransfer.files);
+});
+selectBtn.addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
+dropZone.addEventListener('click', e => { if (e.target === dropZone || e.target.classList.contains('icon') || e.target.tagName === 'P') fileInput.click(); });
+fileInput.addEventListener('change', () => { if (fileInput.files.length) processFiles(fileInput.files); });
+
+// Copy
+copyBtn.addEventListener('click', () => {
+  const text = compactResults.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    copyBtn.textContent = 'Скопировано!';
+    setTimeout(() => copyBtn.textContent = 'Копировать', 1500);
+  });
+});
+
+async function processFiles(fileList) {
+  const files = Array.from(fileList);
+  const total = files.length;
+
+  // Reset UI
+  queueList.innerHTML = '';
+  compactResults.innerHTML = '';
+  detailCards.innerHTML = '';
+  resultsGrid.style.display = 'grid';
+  detailsSection.style.display = 'block';
+  progressBar.style.display = 'block';
+  progressFill.style.width = '0%';
+
+  // Build queue
+  const queueItems = files.map((f, i) => {
+    const div = document.createElement('div');
+    div.className = 'queue-item';
+    div.innerHTML = `<span class="status-icon" id="qi-${i}">&#9679;</span><span class="name">${esc(f.name)}</span>`;
+    queueList.appendChild(div);
+    return div;
+  });
+
+  // Process one by one (respects rate limits server-side)
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const statusEl = document.getElementById(`qi-${i}`);
+    statusEl.innerHTML = '<span class="spinner"></span>';
+    progressStatus.textContent = `Обработка ${i + 1} / ${total}: ${file.name}`;
+    progressFill.style.width = `${((i) / total) * 100}%`;
+
+    try {
+      const formData = new FormData();
+      formData.append('files', file);
+
+      const resp = await fetch('/api/recognize', { method: 'POST', body: formData });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      for (const result of data.results) {
+        if (result.error) {
+          statusEl.innerHTML = '<span style="color:var(--error)">&#10007;</span>';
+          addCompactError(result.filename, result.error);
+          addDetailError(result.filename, result.error);
+        } else {
+          statusEl.innerHTML = '<span style="color:var(--success)">&#10003;</span>';
+          addCompactResult(result);
+          addDetailCard(result);
+        }
+      }
+    } catch (err) {
+      statusEl.innerHTML = '<span style="color:var(--error)">&#10007;</span>';
+      addCompactError(file.name, err.message);
+      addDetailError(file.name, err.message);
+    }
+
+    progressFill.style.width = `${((i + 1) / total) * 100}%`;
+  }
+
+  progressStatus.textContent = `Готово: ${total} файл(ов)`;
+}
+
+function addCompactResult(r) {
+  const div = document.createElement('div');
+  div.className = 'compact-entry';
+  div.innerHTML = `<div class="compact-result">${esc(r.format1)}\n${esc(r.format2)}</div>`;
+  compactResults.appendChild(div);
+}
+
+function addCompactError(name, err) {
+  const div = document.createElement('div');
+  div.className = 'compact-entry';
+  div.innerHTML = `<div class="compact-result" style="color:var(--error)">${esc(name)}: ${esc(err)}</div>`;
+  compactResults.appendChild(div);
+}
+
+function addDetailCard(r) {
+  const card = document.createElement('div');
+  card.className = 'detail-card';
+
+  let thumbHtml = '';
+  if (r.thumbnail) {
+    thumbHtml = `<div class="detail-thumb"><img src="data:image/jpeg;base64,${r.thumbnail}" alt=""></div>`;
+  }
+
+  let modulesHtml = '';
+  if (r.details && r.details.modules) {
+    for (const mod of r.details.modules) {
+      let fieldsHtml = '';
+      for (const [, f] of Object.entries(mod.fields)) {
+        const valClass = f.value ? 'val' : 'val empty';
+        const valText = f.value || '---';
+        fieldsHtml += `<div class="detail-field"><span class="lbl">${esc(f.label)}</span><span class="${valClass}">${esc(valText)}</span></div>`;
+      }
+      modulesHtml += `<div class="detail-module"><div class="detail-module-title">${esc(mod.label)}</div><div class="detail-fields">${fieldsHtml}</div></div>`;
+    }
+  }
+
+  // Final merged
+  let finalHtml = '';
+  if (r.details && r.details.final) {
+    let fieldsHtml = '';
+    for (const [, f] of Object.entries(r.details.final)) {
+      const valClass = f.value ? 'val' : 'val empty';
+      const valText = f.value ? `${f.value} <span class="src">(${esc(f.provider)})</span>` : '---';
+      fieldsHtml += `<div class="detail-field"><span class="lbl">${esc(f.label)}</span><span class="${valClass}">${valText}</span></div>`;
+    }
+    finalHtml = `<div class="detail-module"><div class="detail-module-title">Итог</div><div class="detail-fields">${fieldsHtml}</div></div>`;
+  }
+
+  let skippedHtml = '';
+  if (r.details && r.details.skipped && r.details.skipped.length) {
+    skippedHtml = `<div class="detail-skipped">Пропущены: ${esc(r.details.skipped.join(', '))}</div>`;
+  }
+
+  card.innerHTML = `
+    <div class="detail-header">${esc(r.filename)}</div>
+    <div class="detail-body">
+      ${thumbHtml}
+      <div class="detail-info">
+        <div class="detail-formats">${esc(r.format1)}\n${esc(r.format2)}</div>
+        ${modulesHtml}
+        ${skippedHtml}
+        ${finalHtml}
+      </div>
+    </div>`;
+  detailCards.appendChild(card);
+}
+
+function addDetailError(name, err) {
+  const card = document.createElement('div');
+  card.className = 'detail-card';
+  card.innerHTML = `<div class="detail-header">${esc(name)}</div><div class="error-text">${esc(err)}</div>`;
+  detailCards.appendChild(card);
+}
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
