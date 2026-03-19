@@ -108,6 +108,12 @@ class Settings(BaseSettings):
         description="Whether to store source files"
     )
 
+    # Web server
+    web_port: int = Field(
+        default=8080,
+        description="Port for the web interface"
+    )
+
     # Logging
     log_level: str = Field(
         default="INFO",

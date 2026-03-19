@@ -7,6 +7,8 @@ services:
         VARIANT: light
     env_file:
       - .env
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -16,6 +18,7 @@ services:
       - ./utils:/app/utils
       - ./services:/app/services
       - ./db:/app/db
+      - ./web:/app/web
       - ./config.py:/app/config.py
       - ./main.py:/app/main.py
     restart: unless-stopped
@@ -28,6 +31,8 @@ services:
         VARIANT: full
     env_file:
       - .env
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -37,6 +42,7 @@ services:
       - ./utils:/app/utils
       - ./services:/app/services
       - ./db:/app/db
+      - ./web:/app/web
       - ./config.py:/app/config.py
       - ./main.py:/app/main.py
     restart: unless-stopped
