@@ -54,3 +54,6 @@ Thumbs.db
 
 # Alembic
 alembic/versions/*.pyc
+
+# Autopilot local dashboard server state
+.autopilot/serve.*
