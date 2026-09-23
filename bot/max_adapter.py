@@ -10,9 +10,10 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 try:
-    from aiohttp import ClientError, ClientTimeout
+    from aiohttp import ClientError, ClientSession, ClientTimeout
 except ImportError:  # pragma: no cover - maxapi brings aiohttp in production.
     ClientError = Exception  # type: ignore[assignment,misc]
+    ClientSession = None  # type: ignore[assignment,misc]
     ClientTimeout = None  # type: ignore[assignment,misc]
 
 from core.messaging import IncomingImage, MessengerSource
@@ -31,6 +32,9 @@ DOWNLOAD_TIMEOUT_SECONDS = 30.0
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
 
+_DOWNLOAD_SESSION_ATTR = "_passport_download_session"
+_DOWNLOAD_SESSION_CLOSE_WRAPPER_ATTR = "_passport_download_close_wrapper"
+
 NO_IMAGE_MESSAGE = "Пожалуйста, отправьте изображение паспорта."
 UNSUPPORTED_ATTACHMENT_MESSAGE = (
     "Поддерживаются только изображения паспорта (JPEG или PNG)."
@@ -39,6 +43,9 @@ DOWNLOAD_ERROR_MESSAGE = "Не удалось скачать изображен�
 PROCESSING_ERROR_MESSAGE = (
     "Не удалось распознать паспорт. Попробуйте отправить более чёткое изображение."
 )
+
+
+NO_RESULT_MESSAGE = PROCESSING_ERROR_MESSAGE
 
 
 class MaxAdapterError(Exception):
@@ -188,14 +195,24 @@ def attachment_filename(attachment: Any) -> str | None:
     return filename if isinstance(filename, str) and filename.strip() else None
 
 
-def _message_metadata(message: Any) -> tuple[Any, Any, Any, Any]:
+def _message_metadata(
+    message: Any,
+    event: Any | None = None,
+) -> tuple[Any, Any, Any, Any]:
     sender = _value(message, "sender")
+    event_user = _value(event, "from_user")
     recipient = _value(message, "recipient")
     link = _value(message, "link")
     linked_body = _value(link, "message")
 
-    user_id = _value(sender, "user_id")
-    username = _value(sender, "username")
+    user_id = _first_present(
+        _value(sender, "user_id"),
+        _value(event_user, "user_id"),
+    )
+    username = _first_present(
+        _value(sender, "username"),
+        _value(event_user, "username"),
+    )
     chat_id = _first_present(
         _value(recipient, "chat_id"),
         _value(recipient, "user_id"),
@@ -217,7 +234,10 @@ def build_incoming_image(
     """Build the shared input contract for one MAX image attachment."""
 
     message = _message_from_event(message_or_event)
-    user_id, chat_id, message_id, username = _message_metadata(message)
+    user_id, chat_id, message_id, username = _message_metadata(
+        message,
+        message_or_event,
+    )
     return IncomingImage(
         content=content,
         filename=attachment_filename(attachment),
@@ -258,6 +278,62 @@ def _request_timeout(seconds: float) -> Any:
     if ClientTimeout is not None:
         return ClientTimeout(total=seconds)
     return seconds
+
+
+def _session_is_closed(session: Any) -> bool:
+    return bool(_value(session, "closed", False))
+
+
+async def close_download_session(bot: Any) -> None:
+    """Close the unauthenticated image-download session owned by ``bot``."""
+
+    session = _value(bot, _DOWNLOAD_SESSION_ATTR)
+    if session is None:
+        return
+    try:
+        setattr(bot, _DOWNLOAD_SESSION_ATTR, None)
+    except (AttributeError, TypeError):
+        pass
+    close = _value(session, "close")
+    if callable(close):
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+
+
+def _install_download_session_cleanup(bot: Any) -> None:
+    if _value(bot, _DOWNLOAD_SESSION_CLOSE_WRAPPER_ATTR, False):
+        return
+    original_close = _value(bot, "close_session")
+    if not callable(original_close):
+        return
+
+    async def close_session() -> None:
+        try:
+            await close_download_session(bot)
+        finally:
+            result = original_close()
+            if inspect.isawaitable(result):
+                await result
+
+    try:
+        setattr(bot, "close_session", close_session)
+        setattr(bot, _DOWNLOAD_SESSION_CLOSE_WRAPPER_ATTR, True)
+    except (AttributeError, TypeError):
+        return
+
+
+async def get_download_session(bot: Any) -> Any:
+    """Return one reusable unauthenticated session for arbitrary image URLs."""
+
+    session = _value(bot, _DOWNLOAD_SESSION_ATTR)
+    if session is None or _session_is_closed(session):
+        if ClientSession is None:
+            raise MaxDownloadError("image download client is unavailable")
+        session = ClientSession(headers={})
+        setattr(bot, _DOWNLOAD_SESSION_ATTR, session)
+    _install_download_session_cleanup(bot)
+    return session
 
 
 def _header_value(headers: Any, name: str) -> Any:
@@ -326,7 +402,7 @@ async def download_image(
     max_bytes: int | None = None,
     timeout_seconds: float = DOWNLOAD_TIMEOUT_SECONDS,
 ) -> bytes:
-    """Download one image through the reusable SDK HTTP session in memory."""
+    """Download one image through the reusable unauthenticated session."""
 
     try:
         parsed = urlparse(url)
@@ -336,7 +412,7 @@ async def download_image(
         raise MaxDownloadError("image URL is invalid")
 
     if session is None:
-        session = await bot.ensure_session()
+        session = await get_download_session(bot)
     request = getattr(session, "get", None)
     if request is None:
         request = getattr(session, "request", None)
@@ -431,6 +507,9 @@ async def _safe_answer(message: Any, text: str, bot: Any | None = None) -> bool:
 def format_max_result(result: Any) -> str:
     """Render the shared result as plain text, without Telegram markup."""
 
+    if _value(result, "success", True) is False:
+        return NO_RESULT_MESSAGE
+
     details = _first_present(
         _value(result, "details_text"),
         _value(result, "details"),
@@ -471,7 +550,7 @@ async def handle_message(
             await _safe_answer(message, UNSUPPORTED_ATTACHMENT_MESSAGE, bot)
 
         try:
-            session = await bot.ensure_session()
+            session = await get_download_session(bot)
         except Exception as exc:
             _log_error("MAX session acquisition failed", exc)
             await _safe_answer(message, DOWNLOAD_ERROR_MESSAGE, bot)
@@ -491,10 +570,11 @@ async def handle_message(
                 continue
 
             try:
-                incoming = build_incoming_image(message, attachment, content)
+                incoming = build_incoming_image(event, attachment, content)
                 result = await service.process_image(incoming)
                 if _value(result, "success", True) is False:
-                    raise MaxAdapterError("shared service reported an unsuccessful result")
+                    await _safe_answer(message, format_max_result(result), bot)
+                    continue
                 processed.append(result)
                 await _safe_answer(message, format_max_result(result), bot)
             except Exception as exc:
@@ -533,16 +613,19 @@ __all__ = [
     "MaxAdapterError",
     "MaxDownloadError",
     "MaxFileTooLargeError",
+    "NO_RESULT_MESSAGE",
     "attachment_filename",
     "attachment_identifier",
     "attachment_url",
     "build_incoming_image",
     "download_attachment",
     "download_image",
+    "close_download_session",
     "extract_attachments",
     "extract_image_attachments",
     "extract_unsupported_attachments",
     "format_max_result",
+    "get_download_session",
     "handle_message",
     "make_incoming_image",
     "register_handlers",

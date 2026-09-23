@@ -18,6 +18,7 @@ for _name, _value in {
 
 
 from bot.max_adapter import (  # noqa: E402
+    PROCESSING_ERROR_MESSAGE,
     UNSUPPORTED_ATTACHMENT_MESSAGE,
     build_incoming_image,
     extract_image_attachments,
@@ -84,23 +85,36 @@ class _FakeResponseContext:
 
 
 class _FakeSession:
-    def __init__(self, payloads):
+    def __init__(self, payloads, headers=None):
         self.payloads = payloads
+        self.headers = dict(headers or {})
         self.requests = []
+        self.closed = False
 
     def get(self, url, *, timeout):
-        self.requests.append((url, timeout))
+        self.requests.append((url, timeout, dict(self.headers)))
         return _FakeResponseContext(_FakeResponse(self.payloads[url]))
+
+    async def close(self):
+        self.closed = True
 
 
 class _FakeBot:
-    def __init__(self, session):
+    def __init__(self, session, sdk_session=None):
         self.session = session
+        self._passport_download_session = session
+        self.sdk_session = sdk_session or session
+        self.headers = {"Authorization": "fake-max-token"}
         self.ensure_session_calls = 0
+        self.close_session_calls = 0
 
     async def ensure_session(self):
         self.ensure_session_calls += 1
-        return self.session
+        return self.sdk_session
+
+    async def close_session(self):
+        self.close_session_calls += 1
+        await self.sdk_session.close()
 
 
 class _FakeMessage:
@@ -127,6 +141,17 @@ class _FakeProcessingService:
             format1=f"format1-{number}",
             format2=f"format2-{number}",
             details=f"details-{number}",
+        )
+
+
+class _EmptyRecognizer:
+    async def recognize(self, image_bytes, mime_type):
+        return SimpleNamespace(
+            passport_data=PassportData(),
+            modules_used=["fake"],
+            raw_response={"response": "empty"},
+            field_providers={},
+            per_module_data={},
         )
 
 
@@ -318,6 +343,75 @@ class MaxExtractionContractTests(unittest.TestCase):
         self.assertEqual(normal.external_message_id, "message-100")
         self.assertEqual(normal.source_file_id, "photo-1")
 
+    def test_forwarded_event_uses_dispatcher_user_without_recipient_fallback(self):
+        attachment = _image_attachment("photo-1", "https://example.test/photo-1")
+        event = SimpleNamespace(
+            from_user=SimpleNamespace(user_id="forwarded-user", username="forwarded"),
+            message=SimpleNamespace(
+                body=SimpleNamespace(attachments=[]),
+                sender=None,
+                recipient=SimpleNamespace(chat_id="chat-99", user_id="bot-1"),
+                mid="message-100",
+                link=SimpleNamespace(message=SimpleNamespace(attachments=[attachment])),
+            ),
+        )
+
+        incoming = build_incoming_image(event, attachment, b"image-bytes")
+
+        self.assertEqual(incoming.external_user_id, "forwarded-user")
+        self.assertEqual(incoming.external_username, "forwarded")
+        self.assertEqual(incoming.external_chat_id, "chat-99")
+        self.assertEqual(incoming.external_message_id, "message-100")
+
+    def test_download_uses_unauthenticated_session_and_closes_at_shutdown(self):
+        image_session = _FakeSession(
+            {"https://example.test/photo-1": b"image-bytes"},
+            headers={},
+        )
+        sdk_session = _FakeSession(
+            {"https://example.test/photo-1": b"image-bytes"},
+            headers={"Authorization": "fake-max-token"},
+        )
+        bot = _FakeBot(image_session, sdk_session=sdk_session)
+        message = _FakeMessage(
+            [_image_attachment("photo-1", "https://example.test/photo-1")]
+        )
+
+        processed = self._run(
+            handle_message(message, _FakeProcessingService(), bot),
+        )
+        self._run(bot.close_session())
+
+        self.assertEqual(len(processed), 1)
+        self.assertEqual(len(image_session.requests), 1)
+        self.assertNotIn("Authorization", image_session.requests[0][2])
+        self.assertEqual(sdk_session.requests, [])
+        self.assertTrue(image_session.closed)
+        self.assertEqual(bot.close_session_calls, 1)
+
+    def test_zero_field_ocr_is_not_persisted_or_formatted_as_success(self):
+        repository = _FakeRepository()
+        service = PassportProcessingService(
+            repository_factory=lambda: repository,
+            image_processor=_FakeImageProcessor(),
+            recognizer=_EmptyRecognizer(),
+        )
+        image_session = _FakeSession(
+            {"https://example.test/photo-1": b"image-bytes"},
+        )
+        bot = _FakeBot(image_session)
+        message = _FakeMessage(
+            [_image_attachment("photo-1", "https://example.test/photo-1")]
+        )
+
+        processed = self._run(handle_message(message, service, bot))
+
+        self.assertEqual(processed, [])
+        self.assertEqual(repository.records, [])
+        self.assertEqual(message.answers, [PROCESSING_ERROR_MESSAGE])
+        self.assertNotIn("unknown", "\n".join(message.answers))
+        self.assertNotIn("000000", "\n".join(message.answers))
+
     def test_unsupported_and_multiple_attachments_are_deterministic(self):
         first = _image_attachment("photo-1", "https://example.test/photo-1")
         unsupported = {"type": "file", "payload": {"url": "not-an-image"}}
@@ -350,7 +444,7 @@ class MaxExtractionContractTests(unittest.TestCase):
         )
 
         self.assertEqual(len(processed), 2)
-        self.assertEqual(bot.ensure_session_calls, 1)
+        self.assertEqual(bot.ensure_session_calls, 0)
         self.assertEqual(
             [request[0] for request in session.requests],
             [

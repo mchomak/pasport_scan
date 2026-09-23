@@ -160,6 +160,9 @@ class PassportProcessingService:
         """Recognize, persist, and return a platform-neutral result."""
         result, hybrid_result = await self._recognize(incoming.content, notify_wait)
 
+        if not result.success:
+            return replace(result, source=incoming.source)
+
         is_telegram = incoming.source is MessengerSource.TELEGRAM
         async with self._repository_context() as repository:
             record = await repository.create(
@@ -252,6 +255,7 @@ class PassportProcessingService:
             structured_details=structured_details,
             recognition_state=state,
             quality_score=quality_score,
+            success=quality_score > 0,
             modules_used=modules_used,
         )
 
