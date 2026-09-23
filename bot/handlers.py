@@ -2,6 +2,7 @@
 
 from typing import Optional
 import os
+import re
 import sys
 
 from aiogram import Bot, Router, F
@@ -35,6 +36,42 @@ def _get_processing_service() -> PassportProcessingService:
     if _processing_service is None:
         raise RuntimeError("Telegram processing service is not configured")
     return _processing_service
+
+
+_PROVIDER_LABELS = {
+    "rupasportread": "Tesseract MRZ",
+    "yandex_ocr": "Yandex OCR",
+    "openrouter": "OpenRouter LLM",
+    "inferred": "Из имени",
+    "none": "-",
+}
+
+_FIELD_LABELS = {
+    "surname": "Фамилия",
+    "name": "Имя",
+    "middle_name": "Отчество",
+    "passport_number": "Серия и номер",
+    "birth_date": "Дата рождения",
+    "expiry_date": "Срок действия",
+    "gender": "Пол",
+    "birth_place": "Место рождения",
+}
+
+_SERVICE_FIELD_KEYS = {
+    **{label: key for key, label in _FIELD_LABELS.items()},
+    "Surname": "surname",
+    "Name": "name",
+    "Middle name": "middle_name",
+    "Passport number": "passport_number",
+    "Birth date": "birth_date",
+    "Expiry date": "expiry_date",
+    "Gender": "gender",
+    "Birth place": "birth_place",
+}
+_SERVICE_PROVIDER_KEYS = {
+    **{label: key for key, label in _PROVIDER_LABELS.items()},
+    "Inferred": "inferred",
+}
 
 
 # --- Command Handlers ---
@@ -297,6 +334,83 @@ def _telegram_incoming_image(
     )
 
 
+def _legacy_telegram_module_details(details: str) -> dict[str, list[str]]:
+    """Translate shared module blocks to the legacy Telegram detail format."""
+    blocks: dict[str, list[str]] = {}
+    current_key: str | None = None
+
+    for raw_line in details.splitlines():
+        stripped = raw_line.strip()
+        if stripped in {"[Result]", "[Итог]"}:
+            break
+
+        if stripped.startswith("[") and stripped.endswith("]"):
+            display_label = stripped[1:-1]
+            current_key = _SERVICE_PROVIDER_KEYS.get(display_label, display_label)
+            provider_label = _PROVIDER_LABELS.get(current_key, display_label)
+            blocks[current_key] = [f"[{provider_label}]"]
+            continue
+
+        if current_key is None:
+            continue
+
+        block = blocks[current_key]
+        if not stripped:
+            block.append("")
+            continue
+
+        match = re.match(r"^\s*([+-])\s+([^:]+):\s*(.*)$", raw_line)
+        if match:
+            marker, field_label, value = match.groups()
+            field_key = _SERVICE_FIELD_KEYS.get(field_label.strip())
+            if field_key is not None:
+                block.append(f"  {marker} {_FIELD_LABELS[field_key]}: {value}")
+                continue
+        block.append(raw_line)
+
+    return blocks
+
+
+def _legacy_telegram_details(result: PassportResult) -> str:
+    """Render PassportResult details exactly as the former Telegram adapter did."""
+    structured = result.structured_details or {}
+    blocks = _legacy_telegram_module_details(result.details)
+    priority = settings.get_module_priority()
+    lines: list[str] = []
+
+    for module_key in priority:
+        if module_key in blocks:
+            lines.extend(blocks[module_key])
+
+    present_modules = set(structured.get("modules_used", ()))
+    if not present_modules:
+        present_modules = set(blocks)
+    skipped = [
+        _PROVIDER_LABELS.get(module_key, module_key)
+        for module_key in priority
+        if module_key not in present_modules
+    ]
+    if skipped:
+        lines.append(f"Пропущены: {', '.join(skipped)}")
+        lines.append("")
+
+    fields = structured.get("fields", {})
+    providers = structured.get("field_providers", {})
+    lines.append("[Итог]")
+    for field_key, field_label in _FIELD_LABELS.items():
+        value = fields.get(field_key)
+        if value is not None and str(value).strip():
+            provider = _PROVIDER_LABELS.get(
+                providers.get(field_key, "?"),
+                providers.get(field_key, "?"),
+            )
+            lines.append(f"  {field_label}: {value}  ({provider})")
+        else:
+            lines.append(f"  {field_label}: ---")
+
+    return "\n".join(lines)
+
+
 def _format_telegram_result(
     result: PassportResult,
     response_prefix: str = "",
@@ -310,7 +424,7 @@ def _format_telegram_result(
         f"{response_prefix}<code>{result.format1}</code>"
         f"{separator}"
         f"<code>{result.format2}</code>\n"
-        f"<blockquote expandable>{result.details}</blockquote>"
+        f"<blockquote expandable>{_legacy_telegram_details(result)}</blockquote>"
     )
 
 
