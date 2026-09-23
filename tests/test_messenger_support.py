@@ -519,6 +519,46 @@ class MaxExtractionContractTests(unittest.TestCase):
 
         self.assertEqual(session.requests, [])
 
+    def test_safe_resolver_rejects_any_unsafe_resolved_address(self):
+        class _StaticResolver:
+            def __init__(self, results):
+                self.results = results
+
+            async def resolve(self, host, port, family):
+                return self.results
+
+            async def close(self):
+                return None
+
+        resolver = max_adapter._PublicAddressResolver(
+            _StaticResolver(
+                [
+                    {"host": "93.184.216.34", "port": 443},
+                    {"host": "127.0.0.1", "port": 443},
+                ]
+            )
+        )
+
+        with self.assertRaises(OSError):
+            self._run(resolver.resolve("cdn.example", 443, 0))
+
+    def test_real_download_session_uses_non_cached_safe_connector(self):
+        if max_adapter._AIOHTTP_CLIENT_SESSION_TYPE is None:
+            self.skipTest("aiohttp is unavailable")
+
+        bot = _FreshFakeBot()
+        session = self._run(max_adapter.get_download_session(bot))
+        try:
+            connector = session.connector
+            self.assertIsInstance(connector, max_adapter.TCPConnector)
+            self.assertFalse(connector.use_dns_cache)
+            self.assertIsInstance(
+                connector._resolver,
+                max_adapter._PublicAddressResolver,
+            )
+        finally:
+            self._run(bot.close_session())
+
     def test_download_disables_redirects(self):
         session = _RedirectSession()
         bot = _FakeBot(session)

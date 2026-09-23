@@ -6,18 +6,20 @@ import asyncio
 import ipaddress
 import inspect
 import logging
-import socket
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 try:
-    from aiohttp import ClientError, ClientSession, ClientTimeout
+    from aiohttp import ClientError, ClientSession, ClientTimeout, TCPConnector
+    from aiohttp.resolver import DefaultResolver
     _AIOHTTP_CLIENT_SESSION_TYPE = ClientSession
 except ImportError:  # pragma: no cover - maxapi brings aiohttp in production.
     ClientError = Exception  # type: ignore[assignment,misc]
     ClientSession = None  # type: ignore[assignment,misc]
     ClientTimeout = None  # type: ignore[assignment,misc]
+    TCPConnector = None  # type: ignore[assignment,misc]
+    DefaultResolver = None  # type: ignore[assignment,misc]
     _AIOHTTP_CLIENT_SESSION_TYPE = None
 
 from core.messaging import IncomingImage, MessengerSource
@@ -343,7 +345,22 @@ async def get_download_session(bot: Any) -> Any:
     if session is None or _session_is_closed(session):
         if ClientSession is None:
             raise MaxDownloadError("image download client is unavailable")
-        session = ClientSession(headers={})
+        try:
+            if ClientSession is _AIOHTTP_CLIENT_SESSION_TYPE:
+                connector = TCPConnector(
+                    resolver=_PublicAddressResolver(),
+                    use_dns_cache=False,
+                    force_close=True,
+                )
+                session = ClientSession(headers={}, connector=connector)
+            else:
+                # Duck-typed test/adaptor sessions intentionally keep their
+                # small constructor contract and do not need DNS protection.
+                session = ClientSession(headers={})
+        except Exception as exc:
+            raise MaxDownloadError(
+                "image download client could not be created safely"
+            ) from exc
         try:
             setattr(bot, _DOWNLOAD_SESSION_ATTR, session)
         except (AttributeError, TypeError) as exc:
@@ -428,6 +445,33 @@ def _is_public_ip(value: str) -> bool:
     return address.is_global
 
 
+class _PublicAddressResolver:
+    """Resolve hosts while refusing non-global addresses at connect time."""
+
+    def __init__(self, resolver: Any | None = None):
+        if resolver is None:
+            if DefaultResolver is None:
+                raise MaxDownloadError("image download resolver is unavailable")
+            resolver = DefaultResolver()
+        self._resolver = resolver
+
+    async def resolve(self, host: str, port: int = 0, family: int = 0) -> list[Any]:
+        results = await self._resolver.resolve(host, port, family)
+        if not results or any(
+            not _is_public_ip(str(_value(result, "host", "")))
+            for result in results
+        ):
+            raise OSError("image host resolved to a private address")
+        return results
+
+    async def close(self) -> None:
+        close = _value(self._resolver, "close")
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
+
 def _supports_keyword(callable_obj: Any, keyword: str) -> bool:
     try:
         parameters = inspect.signature(callable_obj).parameters.values()
@@ -440,16 +484,10 @@ def _supports_keyword(callable_obj: Any, keyword: str) -> bool:
     )
 
 
-def _is_real_aiohttp_session(session: Any) -> bool:
-    session_type = _AIOHTTP_CLIENT_SESSION_TYPE
-    return session_type is not None and isinstance(session, session_type)
-
-
 async def _validate_download_url(url: str, session: Any) -> None:
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
-        port = parsed.port
     except ValueError as exc:
         raise MaxDownloadError("image URL is invalid") from exc
 
@@ -479,24 +517,8 @@ async def _validate_download_url(url: str, session: Any) -> None:
             raise MaxDownloadError("image URL points to a private address")
         return
 
-    # Fake/duck-typed sessions used by adapters and tests cannot resolve DNS.
-    # Real aiohttp sessions must validate every resolved address to prevent DNS
-    # rebinding from turning an apparently public hostname into an SSRF target.
-    if not _is_real_aiohttp_session(session):
-        return
-
-    try:
-        addresses = await asyncio.get_running_loop().getaddrinfo(
-            normalized_host,
-            port or (443 if parsed.scheme == "https" else 80),
-            type=socket.SOCK_STREAM,
-        )
-    except (socket.gaierror, OSError) as exc:
-        raise MaxDownloadError("image host could not be resolved safely") from exc
-
-    resolved = {str(item[4][0]) for item in addresses if item[4]}
-    if not resolved or any(not _is_public_ip(address) for address in resolved):
-        raise MaxDownloadError("image host resolved to a private address")
+    # Real aiohttp sessions enforce DNS safety in their connector resolver;
+    # duck-typed sessions intentionally skip DNS.
 
 
 async def download_image(
