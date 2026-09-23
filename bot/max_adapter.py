@@ -301,12 +301,12 @@ async def close_download_session(bot: Any) -> None:
             await result
 
 
-def _install_download_session_cleanup(bot: Any) -> None:
+def _install_download_session_cleanup(bot: Any) -> bool:
     if _value(bot, _DOWNLOAD_SESSION_CLOSE_WRAPPER_ATTR, False):
-        return
+        return True
     original_close = _value(bot, "close_session")
     if not callable(original_close):
-        return
+        return False
 
     async def close_session() -> None:
         try:
@@ -320,19 +320,42 @@ def _install_download_session_cleanup(bot: Any) -> None:
         setattr(bot, "close_session", close_session)
         setattr(bot, _DOWNLOAD_SESSION_CLOSE_WRAPPER_ATTR, True)
     except (AttributeError, TypeError):
-        return
+        try:
+            setattr(bot, "close_session", original_close)
+        except (AttributeError, TypeError):
+            pass
+        return False
+    return True
 
 
 async def get_download_session(bot: Any) -> Any:
     """Return one reusable unauthenticated session for arbitrary image URLs."""
 
     session = _value(bot, _DOWNLOAD_SESSION_ATTR)
+    if session is not None and _header_value(
+        _value(session, "headers"), "authorization"
+    ) is not None:
+        raise MaxDownloadError("authenticated session cannot download images")
     if session is None or _session_is_closed(session):
         if ClientSession is None:
             raise MaxDownloadError("image download client is unavailable")
         session = ClientSession(headers={})
-        setattr(bot, _DOWNLOAD_SESSION_ATTR, session)
-    _install_download_session_cleanup(bot)
+        try:
+            setattr(bot, _DOWNLOAD_SESSION_ATTR, session)
+        except (AttributeError, TypeError) as exc:
+            close = _value(session, "close")
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+            raise MaxDownloadError(
+                "image download session cannot be owned by MAX bot"
+            ) from exc
+    if not _install_download_session_cleanup(bot):
+        await close_download_session(bot)
+        raise MaxDownloadError(
+            "MAX bot shutdown lifecycle cannot own image download session"
+        )
     return session
 
 
@@ -411,8 +434,12 @@ async def download_image(
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise MaxDownloadError("image URL is invalid")
 
-    if session is None:
-        session = await get_download_session(bot)
+    owned_session = _value(bot, _DOWNLOAD_SESSION_ATTR)
+    if session is not None and session is not owned_session:
+        raise MaxDownloadError(
+            "caller-supplied session is not the adapter-owned download session"
+        )
+    session = await get_download_session(bot)
     request = getattr(session, "get", None)
     if request is None:
         request = getattr(session, "request", None)

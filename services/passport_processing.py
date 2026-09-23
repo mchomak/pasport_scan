@@ -248,9 +248,11 @@ class PassportProcessingService:
             "modules_used": list(modules_used),
         }
         state = "recognized" if quality_score else "unrecognized"
+        format1 = format_passport_type1(passport_data) if quality_score else ""
+        format2 = format_passport_type2(passport_data) if quality_score else ""
         return PassportResult(
-            format1=format_passport_type1(passport_data),
-            format2=format_passport_type2(passport_data),
+            format1=format1,
+            format2=format2,
             details=details,
             structured_details=structured_details,
             recognition_state=state,

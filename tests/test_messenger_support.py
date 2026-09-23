@@ -25,6 +25,7 @@ from bot.max_adapter import (  # noqa: E402
     extract_unsupported_attachments,
     handle_message,
 )
+import bot.max_adapter as max_adapter  # noqa: E402
 from core.messaging import IncomingImage, MessengerSource  # noqa: E402
 from ocr.models import PassportData  # noqa: E402
 from services import passport_processing  # noqa: E402
@@ -115,6 +116,14 @@ class _FakeBot:
     async def close_session(self):
         self.close_session_calls += 1
         await self.sdk_session.close()
+
+
+class _FreshFakeBot:
+    def __init__(self):
+        self.close_session_calls = 0
+
+    async def close_session(self):
+        self.close_session_calls += 1
 
 
 class _FakeMessage:
@@ -389,6 +398,57 @@ class MaxExtractionContractTests(unittest.TestCase):
         self.assertTrue(image_session.closed)
         self.assertEqual(bot.close_session_calls, 1)
 
+    def test_fresh_download_session_is_empty_reused_and_closed(self):
+        created = []
+
+        def session_factory(*, headers):
+            session = _FakeSession(
+                {"https://example.test/photo-1": b"image-bytes"},
+                headers=headers,
+            )
+            created.append(session)
+            return session
+
+        original_client_session = max_adapter.ClientSession
+        max_adapter.ClientSession = session_factory
+        try:
+            bot = _FreshFakeBot()
+            first = self._run(
+                max_adapter.download_image(
+                    bot,
+                    "https://example.test/photo-1",
+                )
+            )
+            second_session = self._run(max_adapter.get_download_session(bot))
+            self._run(bot.close_session())
+        finally:
+            max_adapter.ClientSession = original_client_session
+
+        self.assertEqual(first, b"image-bytes")
+        self.assertEqual(len(created), 1)
+        self.assertIs(second_session, created[0])
+        self.assertEqual(created[0].headers, {})
+        self.assertTrue(created[0].closed)
+        self.assertEqual(bot.close_session_calls, 1)
+
+    def test_download_rejects_caller_supplied_authenticated_session(self):
+        bot = _FreshFakeBot()
+        authenticated = _FakeSession(
+            {"https://example.test/photo-1": b"secret"},
+            headers={"Authorization": "fake-max-token"},
+        )
+
+        with self.assertRaises(max_adapter.MaxDownloadError):
+            self._run(
+                max_adapter.download_image(
+                    bot,
+                    "https://example.test/photo-1",
+                    session=authenticated,
+                )
+            )
+
+        self.assertEqual(authenticated.requests, [])
+
     def test_zero_field_ocr_is_not_persisted_or_formatted_as_success(self):
         repository = _FakeRepository()
         service = PassportProcessingService(
@@ -411,6 +471,13 @@ class MaxExtractionContractTests(unittest.TestCase):
         self.assertEqual(message.answers, [PROCESSING_ERROR_MESSAGE])
         self.assertNotIn("unknown", "\n".join(message.answers))
         self.assertNotIn("000000", "\n".join(message.answers))
+
+        result = self._run(service.recognize_image(b"image-bytes"))
+        self.assertFalse(result.success)
+        self.assertEqual(result.format1, "")
+        self.assertEqual(result.format2, "")
+        self.assertNotIn("unknown", result.format1.lower())
+        self.assertNotIn("000000", result.format2)
 
     def test_unsupported_and_multiple_attachments_are_deterministic(self):
         first = _image_attachment("photo-1", "https://example.test/photo-1")
