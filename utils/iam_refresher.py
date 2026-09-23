@@ -14,40 +14,25 @@ IAM_TOKEN_URL = "https://iam.api.cloud.yandex.net/iam/v1/tokens"
 REFRESH_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
 
 
-def _mask_token(token: str) -> str:
-    """Show first 8 and last 4 chars of a token for logging."""
-    if len(token) <= 16:
-        return token[:4] + "***"
-    return token[:8] + "***" + token[-4:]
-
-
 async def _fetch_iam_via_oauth(oauth_token: str) -> Optional[str]:
     """Exchange OAuth token for IAM token via Yandex Cloud API."""
-    logger.info(
-        "IAM: exchanging OAuth token via API",
-        oauth_token_preview=_mask_token(oauth_token),
-    )
+    logger.info("IAM: exchanging OAuth token via API")
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
             IAM_TOKEN_URL,
             json={"yandexPassportOauthToken": oauth_token},
         )
         if resp.status_code != 200:
-            body = resp.text[:500]
             logger.error(
                 "IAM: OAuth → IAM exchange failed",
                 status_code=resp.status_code,
-                response_body=body,
             )
             return None
 
         data = resp.json()
         token = data.get("iamToken")
         if token:
-            logger.info(
-                "IAM: token obtained via OAuth API",
-                iam_token_preview=_mask_token(token),
-            )
+            logger.info("IAM: token obtained via OAuth API")
         return token
 
 
@@ -70,16 +55,12 @@ async def _fetch_iam_via_cli() -> Optional[str]:
         logger.error(
             "IAM: yc iam create-token failed",
             returncode=proc.returncode,
-            stderr=stderr.decode().strip(),
         )
         return None
 
     token = stdout.decode().strip()
     if token:
-        logger.info(
-            "IAM: token obtained via yc CLI",
-            iam_token_preview=_mask_token(token),
-        )
+        logger.info("IAM: token obtained via yc CLI")
     return token if token else None
 
 
@@ -93,7 +74,10 @@ async def refresh_iam_token() -> Optional[str]:
                 return token
             logger.warning("IAM: OAuth exchange returned no token")
         except Exception as e:
-            logger.error("IAM: OAuth exchange exception", error=str(e))
+            logger.error(
+                "IAM: OAuth exchange exception",
+                error_type=type(e).__name__,
+            )
     else:
         logger.info("IAM: YC_OAUTH_TOKEN not set, skipping OAuth method")
 
@@ -103,7 +87,7 @@ async def refresh_iam_token() -> Optional[str]:
         if token:
             return token
     except Exception as e:
-        logger.error("IAM: yc CLI exception", error=str(e))
+        logger.error("IAM: yc CLI exception", error_type=type(e).__name__)
 
     logger.warning("IAM: all refresh methods failed")
     return None
@@ -112,7 +96,7 @@ async def refresh_iam_token() -> Optional[str]:
 def _apply_token(token: str) -> None:
     """Update the IAM token in settings."""
     settings.yc_iam_token = token
-    logger.info("IAM: token updated in settings", preview=_mask_token(token))
+    logger.info("IAM: token updated in settings")
 
 
 async def start_iam_refresh_loop() -> None:
@@ -131,4 +115,7 @@ async def start_iam_refresh_loop() -> None:
             else:
                 logger.warning("IAM: periodic refresh failed, keeping current token")
         except Exception as e:
-            logger.error("IAM: periodic refresh loop error", error=str(e))
+            logger.error(
+                "IAM: periodic refresh loop error",
+                error_type=type(e).__name__,
+            )

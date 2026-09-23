@@ -28,9 +28,21 @@ class PassportRecord(Base):
         nullable=False
     )
 
-    # Telegram info
-    tg_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    # Legacy Telegram info (nullable for records received from MAX)
+    tg_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     tg_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Messenger-neutral source metadata
+    source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="telegram",
+        server_default="telegram",
+    )
+    external_user_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    external_chat_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    external_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    external_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Source info
     source_type: Mapped[str] = mapped_column(
@@ -66,4 +78,4 @@ class PassportRecord(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<PassportRecord {self.id} - {self.passport_number or 'N/A'}>"
+        return f"<PassportRecord {self.id}>"

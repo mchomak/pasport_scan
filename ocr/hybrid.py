@@ -101,7 +101,6 @@ class HybridRecognizer:
     def _clean_latin_name(name: Optional[str]) -> Optional[str]:
         if not name:
             return None
-        original = name
         name = name.upper()
 
         name = re.sub(r'3', 'CH', name)
@@ -117,7 +116,7 @@ class HybridRecognizer:
         if not name:
             return None
 
-        debug_log.debug("_clean_latin_name: %s -> %s", original, name)
+        debug_log.debug("_clean_latin_name: normalized name field")
         return name
 
     @staticmethod
@@ -128,13 +127,11 @@ class HybridRecognizer:
         if m and m.group(2):
             tail = m.group(2)
             if not tail.upper().startswith('CH'):
-                debug_log.debug("_trim_patronymic: %s -> %s (cut '%s')",
-                                middle_name, m.group(1), tail)
+                debug_log.debug("_trim_patronymic: normalized patronymic field")
                 return m.group(1).upper()
         m = re.match(r'^(.+(?:OVNA|EVNA))(.+)?$', middle_name, re.IGNORECASE)
         if m and m.group(2):
-            debug_log.debug("_trim_patronymic: %s -> %s (cut '%s')",
-                            middle_name, m.group(1), m.group(2))
+            debug_log.debug("_trim_patronymic: normalized patronymic field")
             return m.group(1).upper()
         return middle_name
 
@@ -201,7 +198,7 @@ class HybridRecognizer:
             result = rupasportread.recognize_from_bytes(image_bytes)
             return result
         except Exception as e:
-            logger.warning("rupasportread failed", error=str(e))
+            logger.warning("rupasportread failed", error_type=type(e).__name__)
             return None
 
     def _rupasportread_to_passport_data(self, data: dict) -> PassportData:
@@ -239,8 +236,10 @@ class HybridRecognizer:
                 sq = cls._name_quality(str(supp_val))
                 if sq > bq:
                     debug_log.debug(
-                        "merge: prefer supplement for %s: %s (q=%d) > %s (q=%d)",
-                        field_name, supp_val, sq, base_val, bq)
+                        "merge: prefer supplement field",
+                        quality=sq,
+                        base_quality=bq,
+                    )
                     merged[field_name] = supp_val
                     supplement_wins.add(field_name)
                 else:
@@ -277,7 +276,7 @@ class HybridRecognizer:
             if result.success and result.passport_data:
                 return result.passport_data
         except Exception as e:
-            logger.error("OpenRouter failed", error=str(e))
+            logger.error("OpenRouter failed", error_type=type(e).__name__)
         return None
 
     async def _run_module_yandex(
@@ -303,7 +302,7 @@ class HybridRecognizer:
                     yd.middle_name = transliterate_to_latin(yd.middle_name)
                 return yd
         except Exception as e:
-            logger.error("Yandex OCR failed", error=str(e))
+            logger.error("Yandex OCR failed", error_type=type(e).__name__)
         return None
 
     async def _run_module_rupasportread(
@@ -315,7 +314,7 @@ class HybridRecognizer:
             if raw:
                 return self._rupasportread_to_passport_data(raw)
         except Exception as e:
-            logger.error("rupasportread failed", error=str(e))
+            logger.error("rupasportread failed", error_type=type(e).__name__)
         return None
 
     # Module dispatcher
@@ -330,8 +329,7 @@ class HybridRecognizer:
     # ------------------------------------------------------------------
     @staticmethod
     def _passport_data_to_debug_dict(data: PassportData) -> dict:
-        return {k: str(v) if v is not None else None
-                for k, v in data.model_dump().items()}
+        return {"filled_fields": data.count_filled_fields()}
 
     async def recognize(
         self,
@@ -388,7 +386,7 @@ class HybridRecognizer:
                     "%s done", module_key,
                     filled=current_data.count_filled_fields(),
                     essential=self._count_essential(current_data),
-                    new_fields=list(new_fields),
+                    new_field_count=len(new_fields),
                 )
             else:
                 debug_log.debug("[%s] returned None", module_key)
@@ -400,7 +398,7 @@ class HybridRecognizer:
                 current_data.name, current_data.middle_name,
                 current_data.surname)
             if inferred:
-                debug_log.debug("Gender inferred from name: %s", inferred)
+                debug_log.debug("Gender inferred from name")
                 current_data = current_data.model_copy(
                     update={"gender": inferred})
                 field_providers["gender"] = "inferred"
@@ -411,8 +409,8 @@ class HybridRecognizer:
         debug_log.debug("MERGED RESULT: %s",
                         json.dumps(self._passport_data_to_debug_dict(current_data),
                                    ensure_ascii=False))
-        debug_log.debug("FIELD PROVIDERS: %s", field_providers)
-        debug_log.debug("MODULES USED: %s", modules_used)
+        debug_log.debug("FIELD PROVIDERS count=%d", len(field_providers))
+        debug_log.debug("MODULES USED count=%d", len(modules_used))
         debug_log.debug("=" * 60)
 
         return HybridResult(

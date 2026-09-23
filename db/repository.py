@@ -18,7 +18,7 @@ class PassportRepository:
 
     async def create(
         self,
-        tg_user_id: int,
+        tg_user_id: Optional[int],
         tg_username: Optional[str],
         source_type: str,
         source_file_id: Optional[str],
@@ -34,12 +34,56 @@ class PassportRepository:
         birth_place: Optional[str],
         raw_payload: dict,
         quality_score: int,
+        *,
+        source: str = "telegram",
+        external_user_id: Optional[str] = None,
+        external_chat_id: Optional[str] = None,
+        external_message_id: Optional[str] = None,
+        external_username: Optional[str] = None,
     ) -> PassportRecord:
         """Create a new passport record."""
+        source_value = getattr(source, "value", source)
+        external_user_id = (
+            str(external_user_id) if external_user_id is not None else None
+        )
+        external_chat_id = (
+            str(external_chat_id) if external_chat_id is not None else None
+        )
+        external_message_id = (
+            str(external_message_id) if external_message_id is not None else None
+        )
+        external_username = (
+            str(external_username) if external_username is not None else None
+        )
+        if source_value == "telegram":
+            external_user_id = (
+                external_user_id
+                if external_user_id is not None
+                else str(tg_user_id) if tg_user_id is not None else None
+            )
+            external_message_id = (
+                external_message_id
+                if external_message_id is not None
+                else str(source_message_id) if source_message_id is not None else None
+            )
+            external_username = (
+                external_username if external_username is not None else tg_username
+            )
+        else:
+            # Numeric Telegram columns must never receive MAX identifiers.
+            tg_user_id = None
+            tg_username = None
+            source_message_id = None
+
         record = PassportRecord(
             id=uuid.uuid4(),
             tg_user_id=tg_user_id,
             tg_username=tg_username,
+            source=source_value,
+            external_user_id=external_user_id,
+            external_chat_id=external_chat_id,
+            external_message_id=external_message_id,
+            external_username=external_username,
             source_type=source_type,
             source_file_id=source_file_id,
             source_message_id=source_message_id,
@@ -63,7 +107,7 @@ class PassportRepository:
         logger.info(
             "Created passport record",
             record_id=str(record.id),
-            user_id=tg_user_id,
+            source=source_value,
             quality_score=quality_score
         )
 

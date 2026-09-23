@@ -95,15 +95,13 @@ class OpenRouterProvider:
             fixed = f"{series}{digits[:7]}"
             logger.info(
                 "OpenRouter: applied UZ passport heuristic (trim to 7 digits)",
-                before=value,
-                after=fixed,
+                original_digits=len(digits),
             )
             return fixed
 
         # Fewer than 7 digits: keep as-is
         logger.warning(
             "OpenRouter: unexpected UZ passport number length",
-            value=value,
             digits_len=len(digits),
         )
         return value
@@ -229,10 +227,8 @@ class OpenRouterProvider:
             logger.info(
                 "OpenRouter: normalized passport_number using MRZ rules",
                 source=source,
-                before=original,
-                after=normalized,
-                mrz_raw=mrz_raw,
-                mrz_check_digit=mrz_check_digit,
+                original_length=len(original),
+                normalized_length=len(normalized),
             )
 
         normalized = self._apply_uz_passport_number_rule(normalized)
@@ -244,7 +240,10 @@ class OpenRouterProvider:
         try:
             data = self._extract_json_dict(content)
         except Exception:
-            logger.warning("OpenRouter: could not parse JSON", content=content[:300])
+            logger.warning(
+                "OpenRouter: could not parse JSON",
+                content_length=len(content),
+            )
             return PassportData()
 
         try:
@@ -259,7 +258,10 @@ class OpenRouterProvider:
                 birth_place=self._get_str(data, "birth_place"),
             )
         except Exception:
-            logger.exception("OpenRouter: failed to build PassportData")
+            logger.error(
+                "OpenRouter: failed to build PassportData",
+                error_type="parse_error",
+            )
             return PassportData()
 
     async def recognize_passport(
@@ -327,8 +329,6 @@ class OpenRouterProvider:
                     ratelimit_limit=rate_limit_limit,
                     ratelimit_remaining=rate_limit_remaining,
                     ratelimit_reset=rate_limit_reset,
-                    response_body=body_text,
-                    all_headers=dict(response.headers),
                 )
 
                 if retry_after:
@@ -378,8 +378,6 @@ class OpenRouterProvider:
             logger.error(
                 "OpenRouter HTTP error",
                 status_code=status_code,
-                response_body=body_text,
-                headers=resp_headers,
             )
             return OcrResult(
                 passport_data=PassportData(),
@@ -394,7 +392,10 @@ class OpenRouterProvider:
             )
 
         except Exception as e:
-            logger.error("OpenRouter recognition failed", error=str(e))
+            logger.error(
+                "OpenRouter recognition failed",
+                error_type=type(e).__name__,
+            )
             return OcrResult(
                 passport_data=PassportData(),
                 raw_response={"error": str(e)},

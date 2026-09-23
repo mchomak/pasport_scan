@@ -152,11 +152,15 @@ class YandexOcrProvider(OcrProvider):
 
             except httpx.HTTPStatusError as e:
                 if attempt == max_retries:
-                    logger.error("OCR request failed", error=str(e), status_code=e.response.status_code)
+                    logger.error(
+                        "OCR request failed",
+                        error_type=type(e).__name__,
+                        status_code=e.response.status_code,
+                    )
                     raise
             except Exception as e:
                 if attempt == max_retries:
-                    logger.error("OCR request failed", error=str(e))
+                    logger.error("OCR request failed", error_type=type(e).__name__)
                     raise
                 await asyncio.sleep(backoff_delays[attempt])
 
@@ -170,14 +174,11 @@ class YandexOcrProvider(OcrProvider):
         """Recognize passport from image bytes."""
         try:
             auth_type = "Api-Key" if settings.yc_api_key else "Bearer"
-            cred = settings.yc_api_key or settings.yc_iam_token
-            cred_preview = (cred[:8] + "***") if cred else "EMPTY"
             logger.info(
                 "Starting OCR recognition",
                 mime_type=mime_type,
                 size_bytes=len(image_bytes),
                 auth_type=auth_type,
-                credential_preview=cred_preview,
             )
 
             response_data = await self._make_request(image_bytes, mime_type)
@@ -201,7 +202,7 @@ class YandexOcrProvider(OcrProvider):
             )
 
         except Exception as e:
-            logger.error("OCR recognition failed", error=str(e))
+            logger.error("OCR recognition failed", error_type=type(e).__name__)
             return OcrResult(
                 passport_data=PassportData(),
                 raw_response={"error": str(e)},

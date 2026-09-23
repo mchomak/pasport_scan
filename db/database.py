@@ -23,7 +23,10 @@ def init_db() -> None:
     """Initialize database engine and session maker."""
     global engine, async_session_maker
 
-    logger.info("Initializing database connection", database_url=settings.database_url)
+    logger.info(
+        "Initializing database connection",
+        database_configured=bool(settings.database_url),
+    )
 
     engine = create_async_engine(
         settings.database_url,
@@ -71,9 +74,10 @@ async def create_tables() -> None:
 
 async def close_db() -> None:
     """Close database connection."""
-    global engine
+    global engine, async_session_maker
 
     if engine:
         logger.info("Closing database connection")
         await engine.dispose()
         engine = None
+        async_session_maker = None
