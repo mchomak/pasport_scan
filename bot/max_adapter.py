@@ -92,11 +92,7 @@ def _message_from_event(message_or_event: Any) -> Any:
     return message if message is not None else message_or_event
 
 
-def _effective_body(message: Any) -> Any:
-    body = _value(message, "body")
-    if body is not None:
-        return body
-
+def _linked_body(message: Any) -> Any:
     link = _value(message, "link")
     return _value(link, "message")
 
@@ -111,8 +107,13 @@ def extract_attachments(message_or_event: Any) -> list[Any]:
     """
 
     message = _message_from_event(message_or_event)
-    body = _effective_body(message)
-    return _as_list(_value(body, "attachments"))
+    body_attachments = _as_list(
+        _value(_value(message, "body"), "attachments")
+    )
+    linked_attachments = _as_list(
+        _value(_linked_body(message), "attachments")
+    )
+    return body_attachments + linked_attachments
 
 
 def _attachment_type(attachment: Any) -> str:
