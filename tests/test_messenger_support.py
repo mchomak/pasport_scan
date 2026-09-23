@@ -5,6 +5,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 for _name, _value in {
@@ -21,12 +22,16 @@ from bot.max_adapter import (  # noqa: E402
     PROCESSING_ERROR_MESSAGE,
     UNSUPPORTED_ATTACHMENT_MESSAGE,
     build_incoming_image,
+    download_image,
     extract_image_attachments,
     extract_unsupported_attachments,
     handle_message,
+    MaxDownloadError,
 )
 import bot.max_adapter as max_adapter  # noqa: E402
+import bot.max_main as max_main  # noqa: E402
 from core.messaging import IncomingImage, MessengerSource  # noqa: E402
+import main as telegram_main  # noqa: E402
 from ocr.models import PassportData  # noqa: E402
 from services import passport_processing  # noqa: E402
 from services.passport_processing import PassportProcessingService  # noqa: E402
@@ -162,6 +167,55 @@ class _EmptyRecognizer:
             field_providers={},
             per_module_data={},
         )
+
+
+class _InferredGenderRecognizer:
+    async def recognize(self, image_bytes, mime_type):
+        return SimpleNamespace(
+            passport_data=PassportData(
+                passport_number="4619709685",
+                surname="IVANOVA",
+                name="ANNA",
+                birth_date=date(1990, 1, 2),
+                expiry_date=date(2030, 1, 2),
+            ),
+            modules_used=["fake"],
+            raw_response={"response": "private"},
+            field_providers={},
+            per_module_data={},
+        )
+
+
+class _RedirectResponse:
+    status = 302
+    headers = {"location": "http://127.0.0.1/private"}
+
+    async def read(self):
+        return b"redirect"
+
+
+class _RedirectContext:
+    async def __aenter__(self):
+        return _RedirectResponse()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _RedirectSession:
+    def __init__(self):
+        self.headers = {}
+        self.requests = []
+        self.closed = False
+
+    def get(self, url, *, timeout, allow_redirects=True):
+        self.requests.append(
+            {"url": url, "timeout": timeout, "allow_redirects": allow_redirects}
+        )
+        return _RedirectContext()
+
+    async def close(self):
+        self.closed = True
 
 
 def _image_attachment(identifier, url):
@@ -448,6 +502,113 @@ class MaxExtractionContractTests(unittest.TestCase):
             )
 
         self.assertEqual(authenticated.requests, [])
+
+    def test_download_rejects_private_and_loopback_urls_before_request(self):
+        session = _FakeSession({})
+        bot = _FakeBot(session)
+
+        for url in (
+            "http://127.0.0.1/image.jpg",
+            "http://localhost/image.jpg",
+            "http://[::1]/image.jpg",
+            "http://169.254.169.254/latest/meta-data",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaises(MaxDownloadError):
+                    self._run(download_image(bot, url))
+
+        self.assertEqual(session.requests, [])
+
+    def test_download_disables_redirects(self):
+        session = _RedirectSession()
+        bot = _FakeBot(session)
+
+        with self.assertRaises(MaxDownloadError):
+            self._run(download_image(bot, "https://example.test/photo-1"))
+
+        self.assertEqual(len(session.requests), 1)
+        self.assertFalse(session.requests[0]["allow_redirects"])
+
+    def test_inferred_gender_is_persisted_with_returned_result(self):
+        repository = _FakeRepository()
+        service = PassportProcessingService(
+            repository_factory=lambda: repository,
+            image_processor=_FakeImageProcessor(),
+            recognizer=_InferredGenderRecognizer(),
+        )
+
+        result = self._run(
+            service.process_image(
+                IncomingImage(
+                    content=b"image",
+                    filename="passport.jpg",
+                    source=MessengerSource.MAX,
+                    external_user_id="max-user",
+                    external_chat_id="max-chat",
+                    external_message_id="max-message",
+                )
+            )
+        )
+
+        self.assertEqual(result.structured_details["fields"]["gender"], "female")
+        self.assertEqual(repository.records[0]["gender"], "female")
+
+    def test_max_polling_error_is_propagated_after_cleanup(self):
+        class _FailingDispatcher:
+            def __init__(self):
+                self.stopped = False
+
+            async def start_polling(self, bot):
+                raise RuntimeError("polling failed")
+
+            async def stop_polling(self):
+                self.stopped = True
+
+        class _Runtime:
+            def __init__(self):
+                self.closed = False
+
+            async def start(self):
+                return object()
+
+            async def close(self):
+                self.closed = True
+
+        class _Bot:
+            def __init__(self):
+                self.closed = False
+
+            async def close_session(self):
+                self.closed = True
+
+        dispatcher = _FailingDispatcher()
+        runtime = _Runtime()
+        bot = _Bot()
+        with patch.object(max_main, "register_handlers"):
+            with self.assertRaisesRegex(RuntimeError, "polling failed"):
+                self._run(
+                    max_main.main(
+                        settings_obj=SimpleNamespace(
+                            max_bot_enabled=True,
+                            max_bot_token="fake",
+                        ),
+                        bot=bot,
+                        dispatcher=dispatcher,
+                        runtime=runtime,
+                    )
+                )
+
+        self.assertTrue(dispatcher.stopped)
+        self.assertTrue(bot.closed)
+        self.assertTrue(runtime.closed)
+
+    def test_telegram_disabled_returns_before_runtime_start(self):
+        with patch.object(
+            telegram_main,
+            "settings",
+            SimpleNamespace(telegram_bot_enabled=False),
+        ):
+            self._run(telegram_main.main())
 
     def test_zero_field_ocr_is_not_persisted_or_formatted_as_success(self):
         repository = _FakeRepository()

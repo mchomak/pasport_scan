@@ -123,6 +123,7 @@ async def main(
         logger.info("MAX polling stopped")
     except Exception as exc:
         _log_error("MAX polling failed", exc)
+        raise
     finally:
         with suppress(Exception):
             await _close_object(dispatcher, "stop_polling")

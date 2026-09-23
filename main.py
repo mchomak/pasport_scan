@@ -29,6 +29,13 @@ async def main():
     """Start Telegram, the shared processing runtime, and optional web UI."""
     logger.info("Starting Passport OCR Bot")
 
+    telegram_enabled = getattr(settings, "telegram_bot_enabled", None)
+    if telegram_enabled is None:
+        telegram_enabled = os.getenv("TELEGRAM_BOT_ENABLED", "true")
+    if str(telegram_enabled).strip().lower() in {"0", "false", "no", "off"}:
+        logger.info("Telegram bot disabled")
+        return
+
     runtime = ApplicationRuntime()
     bot: Bot | None = None
     web_server: uvicorn.Server | None = None

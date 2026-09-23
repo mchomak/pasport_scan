@@ -149,7 +149,7 @@ class PassportProcessingService:
         notify_wait: NotifyWait | None = None,
     ) -> PassportResult:
         """Recognize an image without writing a database record."""
-        result, _ = await self._recognize(image_bytes, notify_wait)
+        result, _, _ = await self._recognize(image_bytes, notify_wait)
         return result
 
     async def process_image(
@@ -158,7 +158,10 @@ class PassportProcessingService:
         notify_wait: NotifyWait | None = None,
     ) -> PassportResult:
         """Recognize, persist, and return a platform-neutral result."""
-        result, hybrid_result = await self._recognize(incoming.content, notify_wait)
+        result, hybrid_result, passport_data = await self._recognize(
+            incoming.content,
+            notify_wait,
+        )
 
         if not result.success:
             return replace(result, source=incoming.source)
@@ -176,14 +179,14 @@ class PassportProcessingService:
                 if is_telegram
                 else None,
                 source_page_index=incoming.source_page_index,
-                passport_number=hybrid_result.passport_data.passport_number,
-                expiry_date=hybrid_result.passport_data.expiry_date,
-                surname=hybrid_result.passport_data.surname,
-                name=hybrid_result.passport_data.name,
-                middle_name=hybrid_result.passport_data.middle_name,
-                gender=hybrid_result.passport_data.gender,
-                birth_date=hybrid_result.passport_data.birth_date,
-                birth_place=hybrid_result.passport_data.birth_place,
+                passport_number=passport_data.passport_number,
+                expiry_date=passport_data.expiry_date,
+                surname=passport_data.surname,
+                name=passport_data.name,
+                middle_name=passport_data.middle_name,
+                gender=passport_data.gender,
+                birth_date=passport_data.birth_date,
+                birth_place=passport_data.birth_place,
                 raw_payload=hybrid_result.raw_response,
                 quality_score=result.quality_score,
                 source=incoming.source.value,
@@ -203,7 +206,7 @@ class PassportProcessingService:
         self,
         image_bytes: bytes,
         notify_wait: NotifyWait | None,
-    ) -> tuple[PassportResult, Any]:
+    ) -> tuple[PassportResult, Any, PassportData]:
         await self.start()
         priority = self._settings.get_module_priority()
         if "openrouter" in priority and self._openrouter_provider is not None:
@@ -228,6 +231,7 @@ class PassportProcessingService:
                 modules_used,
             ),
             hybrid_result,
+            passport_data,
         )
 
     def _build_result(

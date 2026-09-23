@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import inspect
 import logging
+import socket
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 try:
     from aiohttp import ClientError, ClientSession, ClientTimeout
+    _AIOHTTP_CLIENT_SESSION_TYPE = ClientSession
 except ImportError:  # pragma: no cover - maxapi brings aiohttp in production.
     ClientError = Exception  # type: ignore[assignment,misc]
     ClientSession = None  # type: ignore[assignment,misc]
     ClientTimeout = None  # type: ignore[assignment,misc]
+    _AIOHTTP_CLIENT_SESSION_TYPE = None
 
 from core.messaging import IncomingImage, MessengerSource
 def _get_logger() -> Any:
@@ -416,6 +420,85 @@ async def _read_bounded_response(response: Any, max_bytes: int) -> bytes:
     return bytes(data)
 
 
+def _is_public_ip(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return address.is_global
+
+
+def _supports_keyword(callable_obj: Any, keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(callable_obj).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or parameter.name == keyword
+        for parameter in parameters
+    )
+
+
+def _is_real_aiohttp_session(session: Any) -> bool:
+    session_type = _AIOHTTP_CLIENT_SESSION_TYPE
+    return session_type is not None and isinstance(session, session_type)
+
+
+async def _validate_download_url(url: str, session: Any) -> None:
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise MaxDownloadError("image URL is invalid") from exc
+
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise MaxDownloadError("image URL is invalid")
+
+    normalized_host = hostname.rstrip(".").lower()
+    if (
+        normalized_host in {"localhost", "localhost.localdomain"}
+        or normalized_host.endswith(".localhost")
+        or normalized_host.endswith(".local")
+    ):
+        raise MaxDownloadError("image URL points to a private host")
+
+    try:
+        ipaddress.ip_address(normalized_host)
+    except ValueError:
+        pass
+    else:
+        if not _is_public_ip(normalized_host):
+            raise MaxDownloadError("image URL points to a private address")
+        return
+
+    # Fake/duck-typed sessions used by adapters and tests cannot resolve DNS.
+    # Real aiohttp sessions must validate every resolved address to prevent DNS
+    # rebinding from turning an apparently public hostname into an SSRF target.
+    if not _is_real_aiohttp_session(session):
+        return
+
+    try:
+        addresses = await asyncio.get_running_loop().getaddrinfo(
+            normalized_host,
+            port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except (socket.gaierror, OSError) as exc:
+        raise MaxDownloadError("image host could not be resolved safely") from exc
+
+    resolved = {str(item[4][0]) for item in addresses if item[4]}
+    if not resolved or any(not _is_public_ip(address) for address in resolved):
+        raise MaxDownloadError("image host resolved to a private address")
+
+
 async def download_image(
     bot: Any,
     url: str,
@@ -427,19 +510,13 @@ async def download_image(
 ) -> bytes:
     """Download one image through the reusable unauthenticated session."""
 
-    try:
-        parsed = urlparse(url)
-    except ValueError as exc:
-        raise MaxDownloadError("image URL is invalid") from exc
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise MaxDownloadError("image URL is invalid")
-
     owned_session = _value(bot, _DOWNLOAD_SESSION_ATTR)
     if session is not None and session is not owned_session:
         raise MaxDownloadError(
             "caller-supplied session is not the adapter-owned download session"
         )
     session = await get_download_session(bot)
+    await _validate_download_url(url, session)
     request = getattr(session, "get", None)
     if request is None:
         request = getattr(session, "request", None)
@@ -449,10 +526,14 @@ async def download_image(
     if request is None:
         raise MaxDownloadError("MAX session cannot issue HTTP requests")
 
+    request_kwargs = {"timeout": _request_timeout(timeout_seconds)}
+    if _supports_keyword(request, "allow_redirects"):
+        request_kwargs["allow_redirects"] = False
+
     try:
         pending_response = request(
             *request_args,
-            timeout=_request_timeout(timeout_seconds),
+            **request_kwargs,
         )
 
         if hasattr(pending_response, "__aenter__"):
