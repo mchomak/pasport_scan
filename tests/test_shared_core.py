@@ -2,6 +2,7 @@ import os
 from datetime import date
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 os.environ["BOT_TOKEN"] = "fake-telegram-token"
@@ -11,6 +12,7 @@ os.environ["OCR_MODULE_PRIORITY"] = ""
 
 from core.messaging import IncomingImage, MessengerSource
 from ocr.models import PassportData
+from ocr.yandex import YandexOcrProvider
 from services.passport_processing import PassportProcessingService
 
 
@@ -61,6 +63,20 @@ class IncomingImageTests(unittest.TestCase):
         self.assertEqual(incoming.external_user_id, "123")
         self.assertEqual(incoming.external_chat_id, "456")
         self.assertEqual(incoming.external_message_id, "789")
+
+
+class LoggingSecurityTests(unittest.TestCase):
+    def test_invalid_yandex_date_does_not_log_raw_value(self):
+        provider = YandexOcrProvider.__new__(YandexOcrProvider)
+        sensitive_value = "passport-date-4619709685"
+
+        with patch("ocr.yandex.logger.warning") as warning:
+            self.assertIsNone(provider._parse_date(sensitive_value))
+
+        warning.assert_called_once()
+        logged_fields = warning.call_args.kwargs
+        self.assertNotIn("date_str", logged_fields)
+        self.assertEqual(logged_fields["value_length"], len(sensitive_value))
 
 
 class PassportProcessingServiceTests(unittest.IsolatedAsyncioTestCase):

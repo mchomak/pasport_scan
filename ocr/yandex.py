@@ -66,7 +66,7 @@ class YandexOcrProvider(OcrProvider):
             except ValueError:
                 continue
 
-        logger.warning("Failed to parse date", date_str=date_str)
+        logger.warning("Failed to parse date", value_length=len(date_str))
         return None
 
     def _extract_passport_data(self, entities: list[dict]) -> PassportData:
