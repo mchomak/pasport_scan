@@ -12,7 +12,7 @@ window.STATE =
   "skillDir": "C:/Users/McHomak/.agents/skills/autopilot",
   "startedAt": "2026-09-23T01:57:37+03:00",
   "updatedAt": "2026-09-23T14:45:00+03:00",
-  "finishedAt": null,
+  "finishedAt": "2026-09-23T14:45:00+03:00",
   "stages": [
     { "id": "preflight", "status": "done", "startedAt": "2026-09-23T01:57:37+03:00", "finishedAt": "2026-09-23T01:57:37+03:00" },
     { "id": "manifest", "status": "done", "startedAt": "2026-09-23T01:57:37+03:00", "finishedAt": "2026-09-23T02:06:12+03:00" },
