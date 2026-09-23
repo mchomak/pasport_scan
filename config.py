@@ -14,8 +14,19 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-    # Telegram Bot
-    bot_token: str = Field(..., description="Telegram bot token")
+    # Messenger bots
+    # Tokens are optional while loading settings so disabled adapters can share
+    # one environment. Each entry point validates its enabled bot token.
+    bot_token: str | None = Field(default=None, description="Telegram bot token")
+    max_bot_token: str | None = Field(default=None, description="MAX bot token")
+    telegram_bot_enabled: bool = Field(
+        default=True,
+        description="Whether the Telegram adapter is enabled",
+    )
+    max_bot_enabled: bool = Field(
+        default=True,
+        description="Whether the MAX adapter is enabled",
+    )
     admin_ids: str = Field(..., description="Comma-separated list of admin Telegram user IDs")
 
     # Database
@@ -51,7 +62,7 @@ class Settings(BaseSettings):
     # OpenRouter (vision LLM)
     openrouter_api_key: str = Field(
         default="",
-        description="OpenRouter API key (sk-or-...)"
+        description="OpenRouter API key"
     )
     openrouter_model: str = Field(
         default="google/gemini-flash-1.5",
@@ -112,6 +123,10 @@ class Settings(BaseSettings):
     web_port: int = Field(
         default=8080,
         description="Port for the web interface"
+    )
+    web_enabled: bool = Field(
+        default=True,
+        description="Whether the web interface is started by the entry point",
     )
 
     # Logging

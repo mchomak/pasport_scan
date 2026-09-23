@@ -1,216 +1,139 @@
 # Passport OCR Bot
 
-Telegram-бот для распознавания паспортов с гибридным OCR-пайплайном (OpenRouter LLM + Yandex OCR + Tesseract MRZ) и сохранением результатов в PostgreSQL.
+Passport OCR Bot is a shared OCR/business service with independent Telegram and MAX messenger adapters. Both adapters write to the same PostgreSQL database and use the same image, configuration, and migration history.
 
-## Возможности
+## Architecture
 
-- Гибридное распознавание паспортов из фотографий (JPEG, PNG) и PDF
-- Три OCR-модуля с настраиваемым приоритетом: OpenRouter LLM, Yandex Cloud OCR, Tesseract MRZ
-- Автоматическое слияние результатов — каждый следующий модуль дополняет пропущенные поля
-- Определение пола по отчеству/фамилии
-- Определение страны по месту рождения
-- Настраиваемые форматы вывода через шаблоны
-- Rate limiting для OpenRouter API (RPM)
-- Экспорт данных в CSV и Excel (для администраторов)
-- Два профиля Docker: light (без Tesseract) и full
-- Исходники монтируются как volume — изменения применяются без пересборки образа
+- `services/passport_processing.py` contains the messenger-neutral OCR and persistence flow.
+- `bot/handlers.py` is the Telegram adapter; `main.py` is its entry point and keeps the existing HTML result format, commands, photo/document handling, and PDF flow.
+- `bot/max_adapter.py` and `bot/max_main.py` are the MAX adapter and entry point. MAX uses polling, in-memory image downloads, and plain-text result presentation.
+- `migration` runs `alembic upgrade head` once before either bot starts.
+- `telegram_bot` and `max_bot` are separate long-running containers. Each container runs one process. Only Telegram publishes the web port.
 
-## Структура проекта
+## Configuration
 
-```
-pasport_scan/
-├── bot/                  # Telegram bot handlers, keyboards
-├── db/                   # SQLAlchemy models, repository, database init
-├── ocr/                  # OCR модули (hybrid, openrouter, yandex, provider)
-├── services/             # Обработка изображений, PDF, экспорт
-├── utils/                # Логгер, форматирование, транслитерация, MRZ, rate limiter
-├── alembic/              # Миграции базы данных
-├── config.py             # Конфигурация (pydantic-settings)
-├── main.py               # Точка входа
-├── Dockerfile
-├── docker-compose.yml
-└── requirements.txt
-```
-
-## Быстрый старт
-
-### 1. PostgreSQL
-
-Бот использует PostgreSQL. Создайте базу данных:
-
-```bash
-createdb pasport_scans
-```
-
-### 2. Настройка
+Copy the example and fill in only the credentials needed by enabled providers and adapters:
 
 ```bash
 cp .env.example .env
 ```
 
-Заполните параметры в `.env` (подробное описание — ниже в разделе «Параметры конфигурации»).
+Important variables:
 
-### 3. Запуск (Docker)
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BOT_TOKEN` | empty | Required when `TELEGRAM_BOT_ENABLED=true` |
+| `MAX_BOT_TOKEN` | empty | Required when `MAX_BOT_ENABLED=true` |
+| `TELEGRAM_BOT_ENABLED` | `true` | Enables the Telegram entry point |
+| `MAX_BOT_ENABLED` | `true` | Enables the MAX entry point |
+| `WEB_ENABLED` | `true` | Enables the web server for the current entry point |
+| `ADMIN_IDS` | none | Comma-separated Telegram administrator IDs |
+| `DATABASE_URL` | none | Shared PostgreSQL URL; Compose uses the `postgres` hostname |
+| `BOT_VARIANT` | `light` | Docker dependency variant: `light` or `full` |
+| `WEB_PORT` | `8080` | Published Telegram web port |
 
-**Light** (OpenRouter + Yandex OCR, маленький образ):
+`OPENROUTER_API_KEY`, `YC_API_KEY`, `YC_IAM_TOKEN`, and `YC_OAUTH_TOKEN` are provider credentials. Keep their values in the untracked `.env`; never put them in source, Compose files, or logs. The example intentionally leaves token fields empty.
+
+## Docker startup
+
+The default image is the light variant:
 
 ```bash
-docker compose --profile light up -d
+docker compose up -d --build
 ```
 
-**Full** (+ Tesseract MRZ, образ больше на ~65 MB):
+For the full image with Tesseract support:
 
 ```bash
-docker compose --profile full up -d
+BOT_VARIANT=full docker compose up -d --build
 ```
+
+PowerShell equivalent:
+
+```powershell
+$env:BOT_VARIANT = "full"
+docker compose up -d --build
+```
+
+Compose starts one `postgres` service, then the one-shot migration job, and finally both bot services. `telegram_bot` uses `WEB_ENABLED=true` and publishes `${WEB_PORT:-8080}`; `max_bot` uses `WEB_ENABLED=false` and publishes no web port. To stop the stack:
 
 ```bash
-# Логи
-docker compose --profile light logs -f
-
-# Остановка
-docker compose --profile light down
-
-# Пересборка (нужна только при изменении зависимостей или Dockerfile)
-docker compose --profile light up -d --build
+docker compose down
 ```
 
-> Исходный код монтируется через volume, поэтому при изменении `.py`-файлов достаточно перезапуска контейнера без `--build`.
+The PostgreSQL data volume is retained by `docker compose down`. Remove it only when intentionally deleting local database data:
 
-### 4. Запуск без Docker
+```bash
+docker compose down -v
+```
+
+## Migrations
+
+Compose applies migrations through the shared image before starting the bots:
+
+```bash
+docker compose run --rm migration
+```
+
+For a local installation, configure `DATABASE_URL` and run:
+
+```bash
+alembic upgrade head
+```
+
+The current migration adds source-aware MAX metadata while preserving existing Telegram columns and rows.
+
+## Logs and service status
+
+```bash
+docker compose ps
+docker compose logs -f migration
+docker compose logs -f telegram_bot
+docker compose logs -f max_bot
+docker compose logs -f postgres
+```
+
+The application logging policy excludes image bytes, Base64, OCR/passport fields, full attachment URLs, and token values. MAX download failures are reported to the user without exposing payloads.
+
+## Local development
 
 ```bash
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
-# Для full-варианта с Tesseract:
-# pip install -r requirements-full.txt
-# + apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus
-
 alembic upgrade head
 python main.py
 ```
 
----
-
-## Параметры конфигурации (.env)
-
-### Telegram Bot
-
-| Параметр | Обязательный | По умолчанию | Описание | Где получить |
-|----------|:---:|---|---|---|
-| `BOT_TOKEN` | да | — | Токен Telegram-бота | Создать бота через [@BotFather](https://t.me/BotFather), команда `/newbot` |
-| `ADMIN_IDS` | да | — | ID администраторов через запятую | Узнать свой ID: отправить любое сообщение боту [@userinfobot](https://t.me/userinfobot) |
-
-### База данных
-
-| Параметр | Обязательный | По умолчанию | Описание | Где получить |
-|----------|:---:|---|---|---|
-| `DATABASE_URL` | да | — | Строка подключения PostgreSQL | Формат: `postgresql+asyncpg://user:password@host:5432/dbname`. Для Docker используйте `host.docker.internal` вместо `localhost` |
-
-### Yandex Cloud OCR
-
-Для работы Yandex OCR нужен `YC_FOLDER_ID` и **один** из трёх вариантов авторизации.
-
-| Параметр | Обязательный | По умолчанию | Описание | Где получить |
-|----------|:---:|---|---|---|
-| `YC_FOLDER_ID` | да* | `""` | ID каталога в Yandex Cloud | [Консоль YC](https://console.yandex.cloud/) → выберите каталог → ID в верхней части страницы |
-| `YC_API_KEY` | — | `""` | API-ключ сервисного аккаунта (**рекомендуется**, не истекает) | `yc iam api-key create --service-account-name <имя>` или [Консоль YC](https://console.yandex.cloud/) → Сервисные аккаунты → Создать API-ключ |
-| `YC_OAUTH_TOKEN` | — | `""` | OAuth-токен (IAM обновляется автоматически каждые 12 ч) | Перейти по [ссылке](https://oauth.yandex.ru/authorize?response_type=token&client_id=1a6990aa636648e9b2ef855fa7bec2fb), скопировать токен |
-| `YC_IAM_TOKEN` | — | `""` | IAM-токен вручную (истекает через 12 ч) | `yc iam create-token` |
-| `YC_OCR_ENDPOINT` | нет | `https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText` | Endpoint Yandex OCR API | Менять не нужно, если не используется приватный endpoint |
-| `OCR_DOCUMENT_MODEL` | нет | `passport` | Модель распознавания документа | Оставить `passport` |
-| `OCR_LANGUAGE_CODES` | нет | `*` | Языки распознавания | `*` — автоопределение. Можно указать `ru,en` |
-
-> \* Обязателен, если Yandex OCR включён в `OCR_MODULE_PRIORITY`.
-
-### OpenRouter (Vision LLM)
-
-| Параметр | Обязательный | По умолчанию | Описание | Где получить |
-|----------|:---:|---|---|---|
-| `OPENROUTER_API_KEY` | да* | `""` | API-ключ OpenRouter | Зарегистрироваться на [openrouter.ai](https://openrouter.ai/), раздел Keys → Create Key |
-| `OPENROUTER_MODEL` | нет | `google/gemini-flash-1.5` | Vision-модель для распознавания | [Список моделей OpenRouter](https://openrouter.ai/models). Рекомендуются: `google/gemini-flash-1.5`, `anthropic/claude-sonnet-4` |
-| `OPENROUTER_RPM` | нет | `0` | Лимит запросов в минуту (0 = без лимита) | Зависит от вашего тарифа на OpenRouter. Бесплатный план — обычно 3-5 RPM |
-
-> \* Обязателен, если `openrouter` включён в `OCR_MODULE_PRIORITY`.
-
-### Приоритет OCR-модулей
-
-| Параметр | Обязательный | По умолчанию | Описание |
-|----------|:---:|---|---|
-| `OCR_MODULE_PRIORITY` | нет | `openrouter,yandex_ocr` | Порядок вызова OCR-модулей через запятую. Первый модуль — наивысший приоритет. Если первый модуль распознал все поля, остальные пропускаются |
-
-Доступные модули:
-- `openrouter` — Vision LLM через OpenRouter (лучшее качество, требует `OPENROUTER_API_KEY`)
-- `yandex_ocr` — Yandex Cloud Vision OCR (требует `YC_FOLDER_ID` + авторизацию)
-- `rupasportread` — локальный Tesseract MRZ (только в `full`-профиле, работает без API)
-
-### Форматы вывода
-
-| Параметр | По умолчанию |
-|----------|---|
-| `FORMAT_TYPE1` | `{country}/{number}/{country}/{birth_date_long}/{gender}/{expiry_long}/{surname}/{name}` |
-| `FORMAT_TYPE2` | `-{surname} {name} {birth_date_short}+{gender}/{country}/{doc_type} {number}/{expiry_short}` |
-
-Доступные переменные в шаблонах:
-
-| Переменная | Пример | Описание |
-|---|---|---|
-| `{country}` | `RUS` | Код страны (3 буквы) |
-| `{number}` | `123456789` | Номер документа |
-| `{surname}` | `IVANOV` | Фамилия (латиница) |
-| `{name}` | `IVAN` | Имя (латиница) |
-| `{gender}` | `M` / `F` | Пол |
-| `{doc_type}` | `P` | Тип документа |
-| `{birth_date_long}` | `01.01.1990` | Дата рождения (ДД.ММ.ГГГГ) |
-| `{birth_date_short}` | `010190` | Дата рождения (ДДММГГ) |
-| `{expiry_long}` | `01.01.2030` | Срок действия (ДД.ММ.ГГГГ) |
-| `{expiry_short}` | `010130` | Срок действия (ДДММГГ) |
-
-### Лимиты и обработка файлов
-
-| Параметр | По умолчанию | Описание |
-|----------|---|---|
-| `OCR_MAX_FILE_MB` | `10` | Максимальный размер загружаемого файла (МБ) |
-| `OCR_MAX_MEGAPIXELS` | `20` | Максимальное разрешение изображения (мегапиксели) |
-| `OCR_RATE_LIMIT_RPS` | `1` | Общий rate limit OCR-запросов (запросов/сек) |
-| `PDF_RENDER_DPI` | `200` | DPI при рендере страниц PDF в изображения |
-
-### Хранение и логирование
-
-| Параметр | По умолчанию | Описание |
-|----------|---|---|
-| `TMP_DIR` | `./tmp` | Директория для временных файлов |
-| `STORE_SOURCE_FILES` | `false` | Сохранять исходные файлы после обработки |
-| `LOG_LEVEL` | `INFO` | Уровень логирования (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-
----
-
-## Использование
-
-1. Откройте бота в Telegram и отправьте `/start`
-2. Отправьте фото паспорта или PDF-документ
-3. Бот вернёт распознанные данные в настроенном формате
-
-Администраторы (`ADMIN_IDS`) могут выгрузить все записи командой `/export`.
-
-## Алгоритм распознавания
-
-1. **Нормализация** — EXIF-ротация, конвертация в RGB, ресайз
-2. **Гибридный пайплайн** — модули запускаются по приоритету; если все ключевые поля заполнены первым модулем, остальные пропускаются
-3. **Слияние** — результаты объединяются; для имён выбирается вариант с лучшим quality score
-4. **Постобработка** — транслитерация, определение пола, очистка MRZ-артефактов
-5. **Сохранение** — запись в PostgreSQL с raw payload для аудита
-
-## Миграции
+Run the MAX entry point separately when `MAX_BOT_ENABLED=true` and `MAX_BOT_TOKEN` is configured:
 
 ```bash
-alembic upgrade head                              # применить все
-alembic downgrade -1                              # откатить последнюю
-alembic revision --autogenerate -m "description"  # создать новую
+python -m bot.max_main
 ```
 
-## Лицензия
+## Verification
 
-MIT
+From the repository root:
+
+```bash
+python -m unittest discover -s tests -v
+python -m compileall -q .
+docker compose config
+docker compose build telegram_bot max_bot
+```
+
+These checks do not require real Telegram, MAX, or OCR provider credentials. Run the Docker commands after creating `.env` from `.env.example`.
+
+## Project layout
+
+```text
+bot/       Telegram and MAX adapters
+core/      Messenger-neutral input contracts
+db/        SQLAlchemy models, repository, and database lifecycle
+ocr/       OCR providers and hybrid recognition
+services/  Shared processing/runtime services
+alembic/   Database migrations
+web/       Telegram-side web interface
+```
+
+The project is licensed under the MIT license.

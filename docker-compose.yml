@@ -1,9 +1,28 @@
+x-bot-common: &bot-common
+  image: pasport-scan-bot:${BOT_VARIANT:-light}
+  build:
+    context: .
+    args:
+      VARIANT: ${BOT_VARIANT:-light}
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - ./tmp:/app/tmp
+
+x-bot-dependencies: &bot-dependencies
+  postgres:
+    condition: service_healthy
+  migration:
+    condition: service_completed_successfully
+
 services:
   postgres:
     image: postgres:16
     container_name: pasport_scans_postgres
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -17,54 +36,36 @@ services:
       timeout: 5s
       retries: 10
 
-  bot-light:
-    profiles: ["light"]
-    build:
-      context: .
-      args:
-        VARIANT: light
-    env_file:
-      - .env
+  migration:
+    <<: *bot-common
+    command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+
+  telegram_bot:
+    <<: *bot-common
+    command: ["python", "main.py"]
+    environment:
+      TELEGRAM_BOT_ENABLED: "true"
+      MAX_BOT_ENABLED: "false"
+      WEB_ENABLED: "true"
+    depends_on:
+      <<: *bot-dependencies
     ports:
       - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
-    volumes:
-      - ./tmp:/app/tmp
-      - ./bot:/app/bot
-      - ./ocr:/app/ocr
-      - ./utils:/app/utils
-      - ./services:/app/services
-      - ./db:/app/db
-      - ./web:/app/web
-      - ./config.py:/app/config.py
-      - ./main.py:/app/main.py
     restart: unless-stopped
 
-  bot-full:
-    profiles: ["full"]
-    build:
-      context: .
-      args:
-        VARIANT: full
-    env_file:
-      - .env
+  max_bot:
+    <<: *bot-common
+    command: ["python", "-m", "bot.max_main"]
+    environment:
+      TELEGRAM_BOT_ENABLED: "false"
+      MAX_BOT_ENABLED: "true"
+      WEB_ENABLED: "false"
     depends_on:
-      postgres:
-        condition: service_healthy
-    ports:
-      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
-    volumes:
-      - ./tmp:/app/tmp
-      - ./bot:/app/bot
-      - ./ocr:/app/ocr
-      - ./utils:/app/utils
-      - ./services:/app/services
-      - ./db:/app/db
-      - ./web:/app/web
-      - ./config.py:/app/config.py
-      - ./main.py:/app/main.py
+      <<: *bot-dependencies
     restart: unless-stopped
 
 volumes:

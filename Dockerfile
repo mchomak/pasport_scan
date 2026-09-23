@@ -37,4 +37,4 @@ RUN mkdir -p /app/tmp
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["sh", "-c", "alembic upgrade head && python main.py"]
+CMD ["python", "main.py"]

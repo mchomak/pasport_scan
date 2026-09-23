@@ -1,6 +1,9 @@
 # Telegram bot
 aiogram>=3.0.0
 
+# MAX messenger bot
+maxapi>=1.2.2,<2.0
+
 # Web framework & server
 fastapi>=0.104.0
 python-multipart>=0.0.6
