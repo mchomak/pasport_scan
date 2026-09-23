@@ -274,12 +274,26 @@ class MaxExtractionContractTests(unittest.TestCase):
                 message=SimpleNamespace(attachments=[attachment])
             ),
         )
+        forwarded_with_empty_body = SimpleNamespace(
+            body=SimpleNamespace(attachments=[]),
+            sender=SimpleNamespace(user_id=42, username="max-user"),
+            recipient=SimpleNamespace(chat_id=99),
+            mid="message-100",
+            link=SimpleNamespace(
+                message=SimpleNamespace(attachments=[attachment])
+            ),
+        )
 
         normal_event = SimpleNamespace(message=normal_message)
         forwarded_event = SimpleNamespace(message=forwarded_message)
+        empty_body_event = SimpleNamespace(message=forwarded_with_empty_body)
         self.assertEqual(extract_image_attachments(normal_event), [attachment])
         self.assertEqual(
             extract_image_attachments(forwarded_event),
+            [attachment],
+        )
+        self.assertEqual(
+            extract_image_attachments(empty_body_event),
             [attachment],
         )
 
@@ -289,8 +303,14 @@ class MaxExtractionContractTests(unittest.TestCase):
             attachment,
             b"image-bytes",
         )
+        empty_body_forwarded = build_incoming_image(
+            empty_body_event,
+            attachment,
+            b"image-bytes",
+        )
 
         self.assertEqual(normal, forwarded)
+        self.assertEqual(normal, empty_body_forwarded)
         self.assertIs(normal.source, MessengerSource.MAX)
         self.assertEqual(normal.content, b"image-bytes")
         self.assertEqual(normal.external_user_id, "42")
