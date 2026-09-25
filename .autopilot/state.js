@@ -1,45 +1,49 @@
 window.STATE =
 {
-  "slug": "max-messenger-support",
-  "dir": "2026-09-23-max-messenger-support",
-  "title": "Поддержка MAX для Passport OCR Bot",
+  "slug": "numpy-opencv-ocr",
+  "dir": "2026-09-25-numpy-opencv-ocr",
+  "title": "Совместимость NumPy/OpenCV в OCR",
   "mode": "full",
   "depth": "normal",
+  "tier": "T0",
   "polish": null,
-  "tier": "T2",
-  "briefFile": "2026-09-23-brief.md",
+  "briefFile": "2026-09-25-brief.md",
   "memoryFile": "AGENTS.md",
   "skillDir": "C:/Users/McHomak/.agents/skills/autopilot",
-  "startedAt": "2026-09-23T01:57:37+03:00",
-  "updatedAt": "2026-09-23T14:45:00+03:00",
-  "finishedAt": "2026-09-23T14:45:00+03:00",
+  "startedAt": "2026-09-25T21:18:07+03:00",
+  "updatedAt": "2026-09-25T22:17:20+03:00",
+  "finishedAt": "2026-09-25T22:17:20+03:00",
   "stages": [
-    { "id": "preflight", "status": "done", "startedAt": "2026-09-23T01:57:37+03:00", "finishedAt": "2026-09-23T01:57:37+03:00" },
-    { "id": "manifest", "status": "done", "startedAt": "2026-09-23T01:57:37+03:00", "finishedAt": "2026-09-23T02:06:12+03:00" },
-    { "id": "briefing", "status": "skipped", "note": "full mode — самобрифинг" },
-    { "id": "spec", "status": "done", "startedAt": "2026-09-23T02:06:12+03:00", "finishedAt": "2026-09-23T02:25:00+03:00" },
-    { "id": "plan", "status": "done", "startedAt": "2026-09-23T02:25:00+03:00", "finishedAt": "2026-09-23T02:25:00+03:00", "note": "5 tickets, tier T2, waves 1-3" },
-    { "id": "build", "status": "done", "startedAt": "2026-09-23T02:28:00+03:00", "finishedAt": "2026-09-23T14:45:00+03:00", "note": "8/8 tickets done" },
-    { "id": "review", "status": "done", "startedAt": "2026-09-23T03:40:00+03:00", "finishedAt": "2026-09-23T14:45:00+03:00", "note": "manifest/spec PASS; blind acceptance found no blocking defects" },
-    { "id": "final", "status": "done", "startedAt": "2026-09-23T14:45:00+03:00", "finishedAt": "2026-09-23T14:45:00+03:00" }
+    { "id": "preflight", "status": "done", "startedAt": "2026-09-25T21:18:07+03:00", "finishedAt": "2026-09-25T21:26:04+03:00" },
+    { "id": "manifest", "status": "done", "startedAt": "2026-09-25T21:26:04+03:00", "finishedAt": "2026-09-25T21:28:10+03:00" },
+    { "id": "briefing", "status": "skipped", "note": "Полный автомат — само-брифинг" },
+    { "id": "spec", "status": "done", "startedAt": "2026-09-25T21:28:10+03:00", "finishedAt": "2026-09-25T21:42:47+03:00" },
+    { "id": "plan", "status": "skipped", "note": "Ярус T0 — без разбиения на задачи" },
+    { "id": "build", "status": "done", "startedAt": "2026-09-25T21:43:42+03:00", "finishedAt": "2026-09-25T21:49:20+03:00" },
+    { "id": "review", "status": "done", "startedAt": "2026-09-25T21:49:20+03:00", "finishedAt": "2026-09-25T22:11:53+03:00", "note": "T0 inline code review; blind acceptance confirmed the requested fix and MAX runtime" },
+    { "id": "final", "status": "done", "startedAt": "2026-09-25T22:11:53+03:00", "finishedAt": "2026-09-25T22:17:20+03:00" }
   ],
-  "requirements": { "total": 53, "done": 53, "inTicket": 0, "inSpec": 0, "placeholder": 0, "deferred": 0, "dropped": 0 },
-  "tickets": [
-    { "id": "01", "title": "Shared core, database, and runtime", "requirements": ["R04","R05","R06","R07","R08","R09","R10","R18","R19","R20","R21","R22","R23","R24","R33","R36","R37","R38","R41","R42","R43","R49"], "blockedBy": [], "wave": 1, "zone": ["core/","services/","db/","alembic/","ocr/","utils/"], "status": "done", "startedAt": "2026-09-23T02:28:00+03:00", "finishedAt": "2026-09-23T02:30:00+03:00", "retries": 0, "repairs": 1, "repairFindings": ["ocr/yandex.py:69 still logs passport date"], "handoffs": 0, "tests": { "passed": 4, "failed": 0 }, "commit": "8cda70d" },
-    { "id": "02", "title": "Telegram adapter regression seam", "requirements": ["R01","R07","R17","R32","R33","R39"], "blockedBy": ["01"], "wave": 2, "zone": ["bot/handlers.py","main.py","web/"], "status": "done", "startedAt": "2026-09-23T02:32:00+03:00", "finishedAt": "2026-09-23T02:42:00+03:00", "retries": 0, "repairs": 1, "repairFindings": ["Telegram detail presentation changed during shared-service refactor"], "handoffs": 0, "tests": { "passed": 4, "failed": 0 }, "commit": "b2e9571" },
-    { "id": "03", "title": "MAX adapter and entry point", "requirements": ["R02","R03","R07","R11","R12","R13","R14","R15","R16","R17","R34","R35","R36","R37","R38","R43","R44","R45","R52"], "blockedBy": ["01"], "wave": 2, "zone": ["bot/max_adapter.py","bot/max_main.py"], "status": "done", "startedAt": "2026-09-23T02:32:00+03:00", "finishedAt": "2026-09-23T02:48:00+03:00", "retries": 0, "repairs": 1, "repairFindings": ["forwarded linked attachments skipped when body exists"], "handoffs": 0, "tests": { "passed": 4, "failed": 0 }, "commit": "1ac09b1" },
-    { "id": "04", "title": "Configuration, deployment, and documentation", "requirements": ["R25","R26","R27","R28","R29","R30","R31","R46","R47","R48","R53"], "blockedBy": ["01"], "wave": 2, "zone": ["config.py",".env.example","requirements.txt","Dockerfile","docker-compose.yml","README.md"], "status": "done", "startedAt": "2026-09-23T02:32:00+03:00", "finishedAt": "2026-09-23T02:35:00+03:00", "retries": 0, "repairs": 0, "handoffs": 0, "tests": { "passed": 4, "failed": 0 }, "commit": "69db3b5", "concerns": ["Docker build could not reach deb.debian.org in this environment; compose config passed", ".env.example comments describe removed Compose profiles", "README omits some supported OCR/output/file-limit/PDF/storage/logging settings"] },
-    { "id": "05", "title": "Contract tests and final verification", "requirements": ["R40","R41","R42","R43","R44","R45","R50","R51"], "blockedBy": ["02","03","04"], "wave": 3, "zone": ["tests/"], "status": "done", "startedAt": "2026-09-23T02:52:00+03:00", "finishedAt": "2026-09-23T03:40:00+03:00", "retries": 0, "repairs": 1, "repairFindings": ["forwarded test omitted body-present/empty-direct case"], "handoffs": 0, "tests": { "passed": 11, "failed": 0 }, "commit": "61b6b41" },
-    { "id": "06", "title": "Blind-acceptance security and forwarded-message repair", "requirements": ["R12","R14","R34","R36","R37"], "blockedBy": ["05"], "wave": 4, "zone": ["bot/max_adapter.py","services/passport_processing.py","tests/"], "status": "done", "startedAt": "2026-09-23T03:50:00+03:00", "finishedAt": "2026-09-23T14:24:00+03:00", "retries": 0, "repairs": 1, "handoffs": 0, "tests": { "passed": 16, "failed": 0 }, "commit": "cea6fb1" },
-    { "id": "07", "title": "Craft/security repair: SSRF, normalized persistence, lifecycle errors", "requirements": ["R12","R14","R34","R36","R37"], "blockedBy": ["06"], "wave": 5, "zone": ["bot/max_adapter.py","services/passport_processing.py","bot/max_main.py","main.py","tests/"], "status": "done", "startedAt": "2026-09-23T14:28:00+03:00", "finishedAt": "2026-09-23T14:35:00+03:00", "retries": 0, "repairs": 0, "handoffs": 0, "tests": { "passed": 21, "failed": 0 }, "commit": "77eb35b" },
-    { "id": "08", "title": "Pin MAX download address validation", "requirements": ["R36","R37"], "blockedBy": ["07"], "wave": 6, "zone": ["bot/max_adapter.py","tests/"], "status": "done", "startedAt": "2026-09-23T14:40:00+03:00", "finishedAt": "2026-09-23T14:43:00+03:00", "retries": 0, "repairs": 0, "handoffs": 0, "tests": { "passed": 23, "failed": 0 }, "commit": "05628a8" }
-  ],
-  "singlePass": null,
+  "requirements": {
+    "total": 3, "done": 3, "inTicket": 0, "inSpec": 0,
+    "placeholder": 0, "deferred": 0, "dropped": 0
+  },
+  "tickets": [],
+  "singlePass": {
+    "startedAt": "2026-09-25T21:43:42+03:00",
+    "finishedAt": "2026-09-25T21:49:20+03:00",
+    "files": ["Dockerfile", "requirements.txt", "AGENTS.md"],
+    "tests": { "passed": 23, "failed": 0 },
+    "commit": "included in the final single-pass commit"
+  },
   "tests": { "passed": 23, "failed": 0 },
   "debt": { "placeholders": [], "assumptions": [], "emptyEnv": [] },
   "additions": [],
-  "coverage": { "found": 8, "fixed": 8, "deferred": 0 },
-  "concerns": ["web/app.py:79 — shared web mapping no longer reconstructs provider modules; existing Telegram/web behavior was not changed further because the requested regression gate is the bot flow", "web/app.py:46-51 — standalone fallback service has no shutdown lifecycle; Compose owns the application runtime in the supported deployment", "main.py:84-95 — Telegram polling failure is logged and returned rather than propagated; per-message isolation and requested independent process startup remain intact", ".env.example comments still mention removed Compose profiles, and README does not enumerate every pre-existing OCR/output/storage setting", "No live Telegram/MAX API E2E or Alembic-against-PostgreSQL run was possible without real credentials and a running database; compose config/build/import and migration wiring were verified"],
-  "reviewers": { "manifestSpec": "01a0cd8a-b1ec-7fb2-b4b1-52e7beb3b231", "craft": "01a0cd8a-b2bd-7003-86e0-5ac173ac2369" },
-  "blind": { "status": "pass", "summary": "No blocking defects; shared core, MAX normal/forwarded flow, source-aware PostgreSQL, Compose separation, tests, and Docker smoke verified", "requirements": { "realized": 10, "partial": 3, "missing": 0 }, "partialReasons": ["No live Telegram/MAX API E2E without real tokens", "No live PostgreSQL migration/recording run in this environment", "Telegram regression verified by code/tests and disabled/startup smoke, not a production-session comparison"] }
+  "coverage": { "found": 3, "fixed": 3, "deferred": 0 },
+  "concerns": [],
+  "reviewers": { "manifestSpec": "01a0d9df-23c7-79c1-95b6-88943856471b", "craft": null },
+  "blind": {
+    "status": "pass",
+    "summary": "Independent checker found no unmet user outcome; NumPy/OpenCV fix and MAX-only current runtime verified. Checker did not run tests; orchestrator independently ran all 23 successfully.",
+    "requirements": { "realized": 3, "partial": 0, "missing": 0 }
+  }
 }

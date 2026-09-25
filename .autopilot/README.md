@@ -1,14 +1,10 @@
-# Как читать эту папку
+# Autopilot workspace
 
-- `dashboard.html` — текущий прогресс запуска Autopilot; обновляется автоматически.
-- `<дата>-<проект>--wip/` — отдельный незавершённый запуск; после завершения суффикс `--wip` снимается.
-- `brief.md` — исходные требования пользователя.
-- `manifest.md` — требования и их статус.
-- `spec.md` — рабочая спецификация.
-- `tickets/` — задачи реализации.
+- `dashboard.html` is the current run dashboard snapshot.
+- Dated run folders preserve each brief, manifest, specification, and interface notes.
+- A folder ending in `--wip` is an active run; completed runs use the bare name.
 
-## Прогоны
-
-| Начат | Папка | Статус | Итог |
+| Started | Run | Status | Outcome |
 |---|---|---|---|
-| 2026-09-23 | `2026-09-23-max-messenger-support` | сдано | Общий OCR/backend и PostgreSQL теперь обслуживают независимые Telegram и MAX adapters; MAX normal/forwarded photos, source-aware migration, Compose services and tests добавлены. |
+| 2026-09-23 | `2026-09-23-max-messenger-support` | complete | Shared OCR/backend and PostgreSQL support Telegram and MAX adapters; forwarded and ordinary MAX photos, source-aware migration, Compose services, and tests were added. |
+| 2026-09-25 | `2026-09-25-numpy-opencv-ocr` | сдано | Закреплён NumPy `<2` для OpenCV 4.9; добавлена проверка OCR-импортов при сборке; перезапущен только бот MAX. |

@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # OpenCV + Tesseract OCR — only for "full" variant
 RUN if [ "$VARIANT" = "full" ]; then \
         apt-get update && apt-get install -y --no-install-recommends \
-            libgl1-mesa-glx \
-            libglib2.0-0 \
+            libgl1 \
+            libglib2.0-0t64 \
             tesseract-ocr \
             tesseract-ocr-eng \
             tesseract-ocr-rus \
@@ -32,6 +32,12 @@ RUN if [ "$VARIANT" = "full" ]; then \
     fi
 
 COPY . .
+
+# Fail the full image build early if the compiled OCR stack is not importable.
+RUN if [ "$VARIANT" = "full" ]; then \
+        ADMIN_IDS=0 DATABASE_URL=postgresql+asyncpg://build:build@localhost/build \
+        python -c "import numpy, cv2, utils.rupasportread"; \
+    fi
 
 RUN mkdir -p /app/tmp
 

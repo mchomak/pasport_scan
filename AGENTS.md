@@ -20,11 +20,11 @@ docker compose build telegram_bot max_bot
 docker compose up -d --build
 ```
 
-The Compose `migration` service runs `alembic upgrade head` against PostgreSQL; the host verification shell does not have an `alembic` executable. `docker compose up -d --build` and the migration are stateful operations and were not run during documentation verification. On 2026-09-23, unittest passed with 23 tests, compileall passed, Compose config passed, and both bot image builds passed. No configured lint/type-check command was found.
+The Compose `migration` service runs `alembic upgrade head` against PostgreSQL; the host verification shell does not have an `alembic` executable. `docker compose up -d --build` and the migration were not run during 2026-09-23 documentation verification. On 2026-09-23, unittest passed with 23 tests, compileall passed, Compose config passed, and both bot image builds passed. On 2026-09-25, unittest passed with 23 tests, compileall and `docker compose config --quiet` passed, and `docker compose build max_bot` passed; `docker compose up -d --no-deps max_bot` redeployed only MAX. In-container imports confirmed NumPy 1.26.4/OpenCV 4.9.0, PostgreSQL remained healthy, and no migration or full-stack restart was run. No configured lint/type-check command was found.
 
 ## Key paths
 
-`main.py`, `bot/max_main.py`, `bot/handlers.py`, `bot/max_adapter.py`, `core/messaging.py`, `services/runtime.py`, `services/passport_processing.py`, `db/models.py`, `db/repository.py`, `alembic/versions/003_add_messenger_source.py`, `tests/test_shared_core.py`, `tests/test_messenger_support.py`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`, and `alembic.ini` are present at the repository root.
+`main.py`, `bot/max_main.py`, `bot/handlers.py`, `bot/max_adapter.py`, `core/messaging.py`, `services/runtime.py`, `services/passport_processing.py`, `db/models.py`, `db/repository.py`, `alembic/versions/003_add_messenger_source.py`, `tests/test_shared_core.py`, `tests/test_messenger_support.py`, `requirements.txt`, `requirements-full.txt`, `Dockerfile`, `docker-compose.yml`, and `alembic.ini` are present at the repository root.
 
 ## Environment names
 
@@ -34,7 +34,8 @@ The Compose `migration` service runs `alembic upgrade head` against PostgreSQL; 
 
 - Services are `postgres`, one-shot `migration`, `telegram_bot`, and `max_bot`. Both bots use the shared `Dockerfile`/image, optional `.env`, PostgreSQL, and `./tmp`; each has one long-running process.
 - Bots wait for healthy PostgreSQL and successful migration. Telegram runs `main.py` and publishes the web port; MAX runs `bot.max_main` and disables the web server. `BOT_VARIANT` selects the light/full image and optional Tesseract/OpenCV dependencies.
-- `requirements.txt` is the dependency source of truth and must contain `maxapi>=1.2.2,<2.0`.
+- `requirements.txt` owns base dependencies, including `maxapi>=1.2.2,<2.0`; `requirements-full.txt` owns full-variant OCR extras, including `opencv-python-headless==4.9.0.80`.
+- Keep NumPy `<2` for OpenCV 4.9 compatibility or `cv2` fails to import with `_ARRAY_API not found`.
 - PostgreSQL data persists in `postgres_data` across ordinary `docker compose down`; removing the volume is deliberate data deletion.
 - MAX accepts only HTTP(S) image URLs, rejects unsafe/private resolved addresses, downloads in memory through the SDK session without redirects, enforces `OCR_MAX_FILE_MB`, checks status and response size, and uses a 30-second timeout. No `MAX_API_BASE_URL` is used.
 
