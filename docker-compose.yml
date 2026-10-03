@@ -51,6 +51,9 @@ services:
       TELEGRAM_BOT_ENABLED: "true"
       MAX_BOT_ENABLED: "false"
       WEB_ENABLED: "true"
+      # Keep Telegram on its existing OCR path and never pass it the MAX provider key.
+      OCR_MODULE_PRIORITY: "rupasportread"
+      OPENROUTER_API_KEY: ""
     depends_on:
       <<: *bot-dependencies
     ports:
@@ -64,9 +67,12 @@ services:
       TELEGRAM_BOT_ENABLED: "false"
       MAX_BOT_ENABLED: "true"
       WEB_ENABLED: "false"
+      OCR_MODULE_PRIORITY: ${MAX_OCR_MODULE_PRIORITY:-openrouter,rupasportread}
     depends_on:
       <<: *bot-dependencies
     restart: unless-stopped
+    cpus: "1.0"
+    mem_limit: 768m
 
 volumes:
   postgres_data:

@@ -8,3 +8,4 @@
 |---|---|---|---|
 | 2026-09-23 | `2026-09-23-max-messenger-support` | complete | Shared OCR/backend and PostgreSQL support Telegram and MAX adapters; forwarded and ordinary MAX photos, source-aware migration, Compose services, and tests were added. |
 | 2026-09-25 | `2026-09-25-numpy-opencv-ocr` | сдано | Закреплён NumPy `<2` для OpenCV 4.9; добавлена проверка OCR-импортов при сборке; перезапущен только бот MAX. |
+| 2026-09-25 | `2026-09-25-passport-ocr-recovery--wip` | в работе | — |

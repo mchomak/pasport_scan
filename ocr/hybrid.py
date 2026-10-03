@@ -162,18 +162,6 @@ class HybridRecognizer:
                 return 'M'
         return None
 
-    @staticmethod
-    def _name_quality(name: Optional[str]) -> int:
-        if not name or not name.strip():
-            return 0
-        score = 10 + len(name)
-        for ch in name:
-            if ch.isdigit():
-                score -= 5
-            elif not ch.isalpha() and ch != '-':
-                score -= 3
-        return max(score, 1)
-
     @classmethod
     def _clean_passport_data(cls, data: PassportData) -> PassportData:
         updates = {}
@@ -222,8 +210,9 @@ class HybridRecognizer:
     @classmethod
     def _merge(cls, base: PassportData, supplement: PassportData,
                ) -> tuple[PassportData, set]:
+        """Keep higher-priority values and fill only its empty fields."""
         merged = {}
-        supplement_wins: set = set()
+        supplement_fills: set = set()
         for field_name in base.model_fields:
             base_val = getattr(base, field_name)
             supp_val = getattr(supplement, field_name)
@@ -231,24 +220,13 @@ class HybridRecognizer:
             base_filled = base_val is not None and str(base_val).strip()
             supp_filled = supp_val is not None and str(supp_val).strip()
 
-            if field_name in cls.NAME_FIELDS and base_filled and supp_filled:
-                bq = cls._name_quality(str(base_val))
-                sq = cls._name_quality(str(supp_val))
-                if sq > bq:
-                    debug_log.debug(
-                        "merge: prefer supplement field",
-                        quality=sq,
-                        base_quality=bq,
-                    )
-                    merged[field_name] = supp_val
-                    supplement_wins.add(field_name)
-                else:
-                    merged[field_name] = base_val
-            elif base_filled:
+            if base_filled:
                 merged[field_name] = base_val
             else:
                 merged[field_name] = supp_val
-        return PassportData(**merged), supplement_wins
+                if supp_filled:
+                    supplement_fills.add(field_name)
+        return PassportData(**merged), supplement_fills
 
     @staticmethod
     def _get_filled_fields(data: PassportData) -> set:
@@ -356,11 +334,6 @@ class HybridRecognizer:
                 logger.warning("Unknown OCR module: %s, skipping", module_key)
                 continue
 
-            # Skip if all essential fields already filled (except first module)
-            if idx > 0 and self._count_essential(current_data) >= len(self.ESSENTIAL_FIELDS):
-                debug_log.debug("[%s] SKIPPED — all essential fields filled", module_key)
-                continue
-
             logger.info("Hybrid: [%d/%d] %s...", idx + 1, total, module_key)
 
             method = getattr(self, method_name)
@@ -375,10 +348,10 @@ class HybridRecognizer:
                                           ensure_ascii=False))
 
                 filled_before = self._get_filled_fields(current_data)
-                current_data, supp_wins = self._merge(current_data, mod_data)
+                current_data, supplement_fills = self._merge(current_data, mod_data)
                 filled_after = self._get_filled_fields(current_data)
                 new_fields = filled_after - filled_before
-                for f in new_fields | supp_wins:
+                for f in new_fields | supplement_fills:
                     field_providers[f] = module_key
                 modules_used.append(module_key)
 

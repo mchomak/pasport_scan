@@ -40,6 +40,11 @@ ENV/
 *.db
 *.sqlite3
 
+# Local passport samples; never publish identity images
+pasports_test/
+# Runtime resource logs stay outside Git and Docker build context.
+metrics/
+
 # Temporary files
 tmp/*
 !tmp/.gitkeep

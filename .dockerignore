@@ -8,7 +8,9 @@ old/
 tmp/
 *.log
 logs/
+metrics/
 data/
+pasports_test/
 .vscode/
 .idea/
 venv/
