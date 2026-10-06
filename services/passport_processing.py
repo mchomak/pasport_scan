@@ -187,7 +187,10 @@ class PassportProcessingService:
                 gender=passport_data.gender,
                 birth_date=passport_data.birth_date,
                 birth_place=passport_data.birth_place,
-                raw_payload=hybrid_result.raw_response,
+                raw_payload={
+                    "modules_used": list(hybrid_result.modules_attempted),
+                    "field_providers": dict(hybrid_result.field_providers),
+                },
                 quality_score=result.quality_score,
                 source=incoming.source.value,
                 external_user_id=incoming.external_user_id,

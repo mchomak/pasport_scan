@@ -34,12 +34,14 @@ class HybridResult:
         raw_response: dict,
         field_providers: Optional[dict] = None,
         per_module_data: Optional[dict] = None,
+        modules_attempted: Optional[List[str]] = None,
     ):
         self.passport_data = passport_data
         self.modules_used = modules_used
         self.raw_response = raw_response
         self.field_providers = field_providers or {}
         self.per_module_data: dict[str, PassportData] = per_module_data or {}
+        self.modules_attempted = modules_attempted or []
 
 
 class HybridRecognizer:
@@ -316,6 +318,7 @@ class HybridRecognizer:
     ) -> HybridResult:
         """Run the hybrid recognition pipeline with configurable priority."""
         modules_used: List[str] = []
+        modules_attempted: List[str] = []
         current_data = PassportData()
         raw_responses: dict = {}
         field_providers: dict = {}
@@ -337,6 +340,7 @@ class HybridRecognizer:
             logger.info("Hybrid: [%d/%d] %s...", idx + 1, total, module_key)
 
             method = getattr(self, method_name)
+            modules_attempted.append(module_key)
             mod_data = await method(image_bytes, mime_type)
 
             if mod_data:
@@ -392,4 +396,5 @@ class HybridRecognizer:
             raw_response=raw_responses,
             field_providers=field_providers,
             per_module_data=per_module_data,
+            modules_attempted=modules_attempted,
         )
