@@ -23,6 +23,63 @@ def _get_logger() -> Any:
 
 logger = _get_logger()
 
+_SAFE_OCR_MODULES = frozenset({"openrouter", "yandex_ocr", "rupasportread"})
+
+
+def _initialize_logger(settings_obj: Any | None) -> None:
+    """Configure structured logging with the MAX source before startup checks."""
+
+    from utils.logger import setup_logger
+
+    log_level = _setting(settings_obj, "log_level", "LOG_LEVEL", "INFO")
+    setup_logger(log_level, messenger_source="max")
+
+    # Reacquire the logger after structlog configuration in case the module
+    # started with the standard-library fallback.
+    global logger
+    logger = _get_logger()
+
+
+def _ocr_modules(settings_obj: Any | None) -> list[str]:
+    """Return configured OCR provider names without reading/logging credentials."""
+
+    value: Any = None
+    get_priority = getattr(settings_obj, "get_module_priority", None)
+    if callable(get_priority):
+        try:
+            value = get_priority()
+        except Exception:
+            value = None
+    if value is None:
+        value = _setting(
+            settings_obj,
+            "ocr_module_priority",
+            "OCR_MODULE_PRIORITY",
+            "openrouter,rupasportread",
+        )
+
+    if isinstance(value, str):
+        values = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        values = value
+    else:
+        values = ()
+
+    return [
+        module
+        for item in values
+        if (module := str(item).strip().lower()) in _SAFE_OCR_MODULES
+    ]
+
+
+def _startup_diagnostics(settings_obj: Any | None) -> dict[str, Any]:
+    modules = _ocr_modules(settings_obj)
+    api_key = _setting(settings_obj, "openrouter_api_key", "OPENROUTER_API_KEY", "")
+    return {
+        "ocr_modules": modules,
+        "openrouter_enabled": "openrouter" in modules and bool(str(api_key or "").strip()),
+    }
+
 
 def _log_error(message: str, exc: BaseException) -> None:
     error_type = type(exc).__name__
@@ -88,6 +145,9 @@ async def main(
 
     if settings_obj is None:
         settings_obj = _load_settings()
+    _initialize_logger(settings_obj)
+    logger.info("MAX bot initialization", **_startup_diagnostics(settings_obj))
+
     if not max_enabled(settings_obj):
         logger.info("MAX bot disabled")
         return
