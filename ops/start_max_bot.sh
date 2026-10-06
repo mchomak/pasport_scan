@@ -41,8 +41,17 @@ if values["ADMIN_IDS"] == "123456789,987654321":
 if values.get("BOT_VARIANT") != "full":
     print("Для локального OCR требуется BOT_VARIANT=full.", file=sys.stderr)
     raise SystemExit(1)
-if values.get("MAX_OCR_MODULE_PRIORITY", "openrouter,rupasportread") != "openrouter,rupasportread":
-    print("Первый запуск измеряет гибридный режим: MAX_OCR_MODULE_PRIORITY=openrouter,rupasportread.", file=sys.stderr)
+ocr_priority = (
+    values.get("BOT_OCR_MODULE_PRIORITY")
+    or values.get("MAX_OCR_MODULE_PRIORITY")
+    or "openrouter,rupasportread"
+)
+if ocr_priority != "openrouter,rupasportread":
+    print(
+        "Первый запуск измеряет гибридный режим: BOT_OCR_MODULE_PRIORITY=openrouter,rupasportread "
+        "(или MAX_OCR_MODULE_PRIORITY при unset общей переменной).",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 if values.get("MAX_BOT_ENABLED", "true").lower() != "true" or values.get("TELEGRAM_BOT_ENABLED", "false").lower() != "false":
     print("Ожидаются MAX_BOT_ENABLED=true и TELEGRAM_BOT_ENABLED=false.", file=sys.stderr)

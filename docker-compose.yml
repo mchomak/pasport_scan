@@ -10,6 +10,9 @@ x-bot-common: &bot-common
   volumes:
     - ./tmp:/app/tmp
 
+x-bot-ocr-environment: &bot-ocr-environment
+  OCR_MODULE_PRIORITY: ${BOT_OCR_MODULE_PRIORITY:-${MAX_OCR_MODULE_PRIORITY:-openrouter,rupasportread}}
+
 x-bot-dependencies: &bot-dependencies
   postgres:
     condition: service_healthy
@@ -48,12 +51,10 @@ services:
     <<: *bot-common
     command: ["python", "main.py"]
     environment:
+      <<: *bot-ocr-environment
       TELEGRAM_BOT_ENABLED: "true"
       MAX_BOT_ENABLED: "false"
       WEB_ENABLED: "true"
-      # Keep Telegram on its existing OCR path and never pass it the MAX provider key.
-      OCR_MODULE_PRIORITY: "rupasportread"
-      OPENROUTER_API_KEY: ""
     depends_on:
       <<: *bot-dependencies
     ports:
@@ -64,10 +65,10 @@ services:
     <<: *bot-common
     command: ["python", "-m", "bot.max_main"]
     environment:
+      <<: *bot-ocr-environment
       TELEGRAM_BOT_ENABLED: "false"
       MAX_BOT_ENABLED: "true"
       WEB_ENABLED: "false"
-      OCR_MODULE_PRIORITY: ${MAX_OCR_MODULE_PRIORITY:-openrouter,rupasportread}
     depends_on:
       <<: *bot-dependencies
     restart: unless-stopped
