@@ -188,7 +188,7 @@ class PassportProcessingService:
                 birth_date=passport_data.birth_date,
                 birth_place=passport_data.birth_place,
                 raw_payload={
-                    "modules_used": list(hybrid_result.modules_attempted),
+                    "modules_used": list(hybrid_result.modules_used),
                     "field_providers": dict(hybrid_result.field_providers),
                 },
                 quality_score=result.quality_score,
