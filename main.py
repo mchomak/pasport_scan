@@ -14,7 +14,7 @@ from config import settings
 from utils.logger import setup_logger, get_logger
 
 # Configure logging before importing adapters; they create loggers at import time.
-setup_logger(settings.log_level)
+setup_logger(settings.log_level, messenger_source="telegram")
 logger = get_logger(__name__)
 
 from bot.handlers import router, set_processing_service as set_telegram_processing_service
@@ -27,7 +27,21 @@ from web.app import (
 
 async def main():
     """Start Telegram, the shared processing runtime, and optional web UI."""
-    logger.info("Starting Passport OCR Bot")
+    supported_ocr_modules = {"openrouter", "yandex_ocr", "rupasportread"}
+    ocr_modules = [
+        module
+        for module in settings.get_module_priority()
+        if module in supported_ocr_modules
+    ]
+    openrouter_key_configured = bool(settings.openrouter_api_key)
+    logger.info(
+        "Starting Passport OCR Bot",
+        ocr_modules=ocr_modules,
+        openrouter_key_configured=openrouter_key_configured,
+        openrouter_enabled=(
+            "openrouter" in ocr_modules and openrouter_key_configured
+        ),
+    )
 
     telegram_enabled = getattr(settings, "telegram_bot_enabled", None)
     if telegram_enabled is None:

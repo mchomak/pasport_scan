@@ -10,7 +10,10 @@ import structlog
 _LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 
 
-def setup_logger(log_level: str = "INFO") -> None:
+def setup_logger(
+    log_level: str = "INFO",
+    messenger_source: str | None = None,
+) -> None:
     """Configure structured logging with structlog + file debug handler."""
 
     os.makedirs(_LOG_DIR, exist_ok=True)
@@ -54,6 +57,11 @@ def setup_logger(log_level: str = "INFO") -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+    if messenger_source is None:
+        structlog.contextvars.unbind_contextvars("messenger")
+    else:
+        structlog.contextvars.bind_contextvars(messenger=messenger_source)
 
     # Use structlog's ProcessorFormatter for console output
     formatter = structlog.stdlib.ProcessorFormatter(
